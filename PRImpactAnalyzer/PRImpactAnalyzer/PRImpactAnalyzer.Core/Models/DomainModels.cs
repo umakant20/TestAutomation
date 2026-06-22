@@ -116,11 +116,6 @@ public class AnalysisRequest
     // Local repo paths (already cloned on dev machine)
     public string DevRepoLocalPath { get; set; } = string.Empty;
     public string TestRepoLocalPath { get; set; } = string.Empty;
-
-    // GitHub Copilot API
-    public string CopilotApiKey { get; set; } = string.Empty;        // *** PLACEHOLDER — set via UI or config ***
-    public string CopilotApiEndpoint { get; set; } = "https://api.githubcopilot.com/chat/completions";
-    public string CopilotModel { get; set; } = "gpt-4o";
 }
 
 public class AnalysisResult

@@ -182,3 +182,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     .cred-row { grid-template-columns: 1fr; }
     .app-main { padding: 16px; }
 }
+
+/* ── Manual Copilot bridge — chunk cards ──────────────────────────────────── */
+.chunk-card { border-color: rgba(88,101,242,.35); }
+.chunk-badge {
+    display: inline-block; margin-left: 10px; padding: 2px 10px;
+    background: rgba(88,101,242,.15); color: var(--accent); border-radius: 10px;
+    font-size: 11px; font-weight: 600; vertical-align: middle;
+}
+.prompt-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.prompt-textarea {
+    width: 100%; min-height: 220px; resize: vertical;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-family: var(--font-mono); font-size: 12px; padding: 12px;
+}
+.token-estimate { margin-top: 4px; text-align: right; }

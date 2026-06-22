@@ -6,7 +6,7 @@ using PRImpactAnalyzer.Plugins.ColdFusion;
 using PRImpactAnalyzer.Plugins.DotNet;
 using PRImpactAnalyzer.Plugins.Soap;
 using PRImpactAnalyzer.Plugins.SpecFlow;
-using PRImpactAnalyzer.Web.Components;   // needed so App type resolves at line 57
+using PRImpactAnalyzer.Web.Components;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,20 +14,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// ── Configuration ────────────────────────────────────────────────────────────
-var cfg = builder.Configuration.GetSection("PrImpactAnalyzer");
-
 // ── Infrastructure ───────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IPrDiffProvider, AzureDevOpsPrDiffProvider>();
 
-// ILlmOrchestrator is registered as a factory so it picks up the API key
-// from appsettings / user-secrets at startup
-builder.Services.AddTransient<ILlmOrchestrator>(sp =>
-    new GitHubCopilotOrchestrator(
-        apiKey:   cfg["CopilotApiKey"] ?? string.Empty,
-        endpoint: cfg["CopilotApiEndpoint"] ?? "https://api.githubcopilot.com/chat/completions",
-        model:    cfg["CopilotModel"] ?? "gpt-4o",
-        logger:   sp.GetRequiredService<ILogger<GitHubCopilotOrchestrator>>()));
+// Manual Copilot bridge — holds per-session "waiting for pasted response" state.
+// Scoped so each browser tab/session has its own independent paste workflow.
+// NOTE: this is a UI-facing helper, not part of AnalysisPipeline's constructor —
+// the pipeline now builds prompts directly and never calls any LLM endpoint itself.
+builder.Services.AddScoped<ManualCopilotBridgeOrchestrator>();
 
 // ── Plugins ──────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<ICodeAnalyzer, SoapWsdlAnalyzer>();
@@ -38,7 +32,7 @@ builder.Services.AddSingleton<ITestParser,   SpecFlowParser>();
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<PromptBuilder>();
 builder.Services.AddSingleton<LlmResponseParser>();
-builder.Services.AddTransient<AnalysisPipeline>();
+builder.Services.AddScoped<AnalysisPipeline>();
 
 var app = builder.Build();
 
@@ -52,7 +46,6 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseAntiforgery();
 
-// App is now resolvable via the `using PRImpactAnalyzer.Web.Components` above
 app.MapRazorComponents<App>()
    .AddInteractiveServerRenderMode();
 

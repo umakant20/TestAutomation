@@ -1,0 +1,387 @@
+@page "/"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+
+@using Microsoft.AspNetCore.Components.Web
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using PRImpactAnalyzer.Core.Models
+@using PRImpactAnalyzer.Core.Pipeline
+@using PRImpactAnalyzer.Core.Interfaces
+@using Microsoft.Extensions.Configuration
+
+@inject AnalysisPipeline Pipeline
+@inject IConfiguration Config
+@inject ILogger<Analyze> Logger
+
+<PageTitle>PR Test Impact Analyzer</PageTitle>
+
+<div class="analyzer-page">
+
+    <!-- ── Input form ──────────────────────────────────────────────────────── -->
+    <section class="card form-card">
+        <h2 class="card-title">🔧 Analysis Settings</h2>
+
+        <div class="form-grid">
+            <!-- PR URL -->
+            <div class="form-group span-2">
+                <label>Azure DevOps PR URL</label>
+                <input @bind="Request.DevRepoPrUrl" placeholder="https://dev.azure.com/org/project/_git/repo/pullrequest/123" class="input-full" />
+            </div>
+
+            <!-- Local paths -->
+            <div class="form-group">
+                <label>Dev Repo Local Path</label>
+                <input @bind="Request.DevRepoLocalPath" placeholder="C:\source\MyApp.Dev" class="input-full" />
+                <span class="hint">Local clone of the .NET / ColdFusion repo</span>
+            </div>
+
+            <div class="form-group">
+                <label>Test Repo Local Path</label>
+                <input @bind="Request.TestRepoLocalPath" placeholder="C:\source\MyApp.Tests" class="input-full" />
+                <span class="hint">Local clone of the C# SpecFlow / Reqnroll repo</span>
+            </div>
+
+            <!-- Credentials section -->
+            <div class="form-group cred-group span-2">
+                <div class="cred-header">🔑 Credentials <span class="cred-note">(stored in memory only, never sent anywhere except the APIs below)</span></div>
+                <div class="cred-row">
+                    <div class="form-group">
+                        <label>Azure DevOps PAT</label>
+                        <input @bind="Request.AzureDevOpsPat" type="password" placeholder="Paste your ADO Personal Access Token" class="input-full" />
+                        <span class="hint">
+                            Generate at: <code>dev.azure.com/{org} → User Settings → Personal Access Tokens</code>
+                            — scope: <strong>Code (Read)</strong>
+                        </span>
+                    </div>
+                    <div class="form-group">
+                        <label>GitHub Copilot API Key</label>
+                        <input @bind="Request.CopilotApiKey" type="password" placeholder="Paste your GitHub Copilot API key" class="input-full" />
+                        <span class="hint">
+                            Generate at: <code>github.com → Settings → Developer Settings → Personal Access Tokens</code>
+                            — scope: <strong>copilot</strong>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced -->
+            <details class="span-2 advanced-section">
+                <summary>Advanced options</summary>
+                <div class="form-grid" style="margin-top:12px;">
+                    <div class="form-group">
+                        <label>Copilot API Endpoint</label>
+                        <input @bind="Request.CopilotApiEndpoint" class="input-full" />
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <input @bind="Request.CopilotModel" class="input-full" />
+                    </div>
+                </div>
+            </details>
+        </div>
+
+        <!-- Action buttons -->
+        <div class="form-actions">
+            <button @onclick="RunAnalysis" disabled="@IsRunning" class="btn btn-primary">
+                @if (IsRunning)
+                {
+                    <span class="spinner"></span>
+                    <span>Analyzing…</span>
+                }
+                else
+                {
+                    <span>🔍 Analyze PR</span>
+                }
+            </button>
+            @if (Result != null)
+            {
+                <button @onclick="ClearResults" class="btn btn-secondary">Clear</button>
+            }
+        </div>
+
+        @if (!string.IsNullOrEmpty(StatusMessage))
+        {
+            <div class="status-bar @(IsError ? "status-error" : "status-info")">
+                @StatusMessage
+            </div>
+        }
+    </section>
+
+    <!-- ── Progress log ─────────────────────────────────────────────────────── -->
+    @if (ProgressLog.Any())
+    {
+        <section class="card progress-card">
+            <h3 class="card-title">📋 Progress</h3>
+            <div class="progress-log">
+                @foreach (var entry in ProgressLog)
+                {
+                    <div class="log-line @entry.Level.ToLower()">
+                        <span class="log-time">@entry.Time.ToString("HH:mm:ss")</span>
+                        <span class="log-msg">@entry.Message</span>
+                    </div>
+                }
+            </div>
+        </section>
+    }
+
+    <!-- ── Results ──────────────────────────────────────────────────────────── -->
+    @if (Result != null && Result.Success)
+    {
+        <!-- Summary strip -->
+        <section class="card summary-card">
+            <div class="summary-grid">
+                <div class="summary-stat">
+                    <span class="stat-value">@Result.ImpactedScenarios.Count</span>
+                    <span class="stat-label">Impacted Scenarios</span>
+                </div>
+                <div class="summary-stat">
+                    <span class="stat-value text-high">@Result.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.High)</span>
+                    <span class="stat-label">HIGH confidence</span>
+                </div>
+                <div class="summary-stat">
+                    <span class="stat-value text-medium">@Result.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.Medium)</span>
+                    <span class="stat-label">MEDIUM confidence</span>
+                </div>
+                <div class="summary-stat">
+                    <span class="stat-value text-verify">@Result.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.Verify)</span>
+                    <span class="stat-label">Needs VERIFY</span>
+                </div>
+                <div class="summary-stat">
+                    <span class="stat-value">@Result.AllScenarios.Count</span>
+                    <span class="stat-label">Total Scenarios Scanned</span>
+                </div>
+                <div class="summary-stat">
+                    <span class="stat-value">@Result.ChangedSymbols.Count</span>
+                    <span class="stat-label">Changed Symbols</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Impacted scenarios table -->
+        @if (Result.ImpactedScenarios.Any())
+        {
+            <section class="card results-card">
+                <div class="results-header">
+                    <h2 class="card-title">🎯 Impacted Test Scenarios</h2>
+                    <div class="filter-bar">
+                        <label>Filter:</label>
+                        <button @onclick='() => SetFilter("ALL")' class="@FilterClass("ALL")">All</button>
+                        <button @onclick='() => SetFilter("HIGH")' class="@FilterClass("HIGH")">HIGH</button>
+                        <button @onclick='() => SetFilter("MEDIUM")' class="@FilterClass("MEDIUM")">MEDIUM</button>
+                        <button @onclick='() => SetFilter("VERIFY")' class="@FilterClass("VERIFY")">VERIFY</button>
+                    </div>
+                </div>
+
+                <div class="table-wrap">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Scenario Name</th>
+                                <th>Feature File</th>
+                                <th>Matched Change</th>
+                                <th>Confidence</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @{
+                                var filtered = FilteredScenarios();
+                                int idx = 1;
+                            }
+                            @foreach (var scenario in filtered)
+                            {
+                                <tr class="@RowClass(scenario.Confidence)">
+                                    <td class="col-idx">@(idx++)</td>
+                                    <td class="col-name"><strong>@scenario.ScenarioName</strong></td>
+                                    <td class="col-file"><code>@scenario.FeatureFile</code></td>
+                                    <td class="col-change">@scenario.MatchedChange</td>
+                                    <td class="col-conf">
+                                        <span class="badge badge-@scenario.Confidence.ToString().ToLower()">
+                                            @scenario.Confidence.ToString().ToUpper()
+                                        </span>
+                                    </td>
+                                    <td class="col-reason">@scenario.Reason</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+        else
+        {
+            <section class="card">
+                <div class="empty-state">
+                    <span class="empty-icon">✅</span>
+                    <strong>No impacted scenarios found</strong>
+                    <span>Copilot found no test scenarios connected to the changed symbols in this PR.</span>
+                </div>
+            </section>
+        }
+
+        <!-- Changed symbols (collapsible) -->
+        <section class="card">
+            <details>
+                <summary class="card-title">🧩 Changed Symbols Extracted (@Result.ChangedSymbols.Count)</summary>
+                <div class="table-wrap" style="margin-top:12px;">
+                    <table class="results-table">
+                        <thead>
+                            <tr><th>File</th><th>Symbol</th><th>Kind</th><th>Change</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var sym in Result.ChangedSymbols)
+                            {
+                                <tr>
+                                    <td><code>@sym.File</code></td>
+                                    <td><strong>@sym.Symbol</strong>@(sym.OldSymbol != null ? $" (was: {sym.OldSymbol})" : "")</td>
+                                    <td>@sym.Kind</td>
+                                    <td><span class="badge badge-@sym.Change.ToString().ToLower()">@sym.Change</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        </section>
+
+        <!-- Raw LLM prompt / response (collapsible debug) -->
+        <section class="card">
+            <details>
+                <summary class="card-title">🤖 Raw Copilot Prompt &amp; Response (debug)</summary>
+                <div style="margin-top:12px;">
+                    <h4>Prompt sent to Copilot:</h4>
+                    <pre class="raw-block">@Result.RawLlmPrompt</pre>
+                    <h4 style="margin-top:16px;">Response received:</h4>
+                    <pre class="raw-block">@Result.RawLlmResponse</pre>
+                </div>
+            </details>
+        </section>
+    }
+    else if (Result != null && !Result.Success)
+    {
+        <section class="card error-card">
+            <h3>❌ Analysis failed</h3>
+            <p>@Result.ErrorMessage</p>
+        </section>
+    }
+</div>
+
+@code {
+    private AnalysisRequest Request { get; set; } = new();
+    private AnalysisResult? Result { get; set; }
+    private bool IsRunning { get; set; }
+    private bool IsError { get; set; }
+    private string StatusMessage { get; set; } = string.Empty;
+    private string ActiveFilter { get; set; } = "ALL";
+    private List<LogEntry> ProgressLog { get; set; } = new();
+
+    protected override void OnInitialized()
+    {
+        // Pre-populate from appsettings (user can override in UI)
+        var cfg = Config.GetSection("PrImpactAnalyzer");
+        Request.AzureDevOpsPat      = cfg["AzureDevOpsPat"] ?? string.Empty;
+        Request.CopilotApiKey       = cfg["CopilotApiKey"] ?? string.Empty;
+        Request.CopilotApiEndpoint  = cfg["CopilotApiEndpoint"] ?? "https://api.githubcopilot.com/chat/completions";
+        Request.CopilotModel        = cfg["CopilotModel"] ?? "gpt-4o";
+        Request.DevRepoLocalPath    = cfg["DefaultDevRepoPath"] ?? string.Empty;
+        Request.TestRepoLocalPath   = cfg["DefaultTestRepoPath"] ?? string.Empty;
+    }
+
+    private async Task RunAnalysis()
+    {
+        if (string.IsNullOrWhiteSpace(Request.DevRepoPrUrl))
+        {
+            SetStatus("Please enter an Azure DevOps PR URL.", error: true);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(Request.TestRepoLocalPath))
+        {
+            SetStatus("Please enter the local path to the test repo.", error: true);
+            return;
+        }
+
+        IsRunning = true;
+        IsError = false;
+        StatusMessage = string.Empty;
+        ProgressLog.Clear();
+        Result = null;
+        StateHasChanged();
+
+        Log("INFO", $"Starting analysis for PR: {Request.DevRepoPrUrl}");
+        Log("INFO", $"Test repo: {Request.TestRepoLocalPath}");
+
+        try
+        {
+            Log("INFO", "Phase 1 — Fetching PR diff from Azure DevOps…");
+            StateHasChanged();
+
+            Result = await Pipeline.RunAsync(Request);
+
+            if (Result.Success)
+            {
+                Log("INFO", $"Phase 1 complete — {Result.ChangedSymbols.Count} changed symbols extracted.");
+                Log("INFO", $"Phase 2 complete — {Result.AllScenarios.Count} scenarios scanned.");
+                Log("INFO", $"Phase 3 complete — {Result.ImpactedScenarios.Count} impacted scenarios identified.");
+                SetStatus($"✅ Analysis complete. {Result.ImpactedScenarios.Count} impacted scenarios found.");
+            }
+            else
+            {
+                Log("ERROR", $"Analysis failed: {Result.ErrorMessage}");
+                SetStatus(Result.ErrorMessage ?? "Analysis failed.", error: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Unhandled error during analysis");
+            Log("ERROR", ex.Message);
+            SetStatus($"Error: {ex.Message}", error: true);
+        }
+        finally
+        {
+            IsRunning = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ClearResults()
+    {
+        Result = null;
+        ProgressLog.Clear();
+        StatusMessage = string.Empty;
+        ActiveFilter = "ALL";
+    }
+
+    private void SetStatus(string message, bool error = false)
+    {
+        StatusMessage = message;
+        IsError = error;
+    }
+
+    private void Log(string level, string message)
+    {
+        ProgressLog.Add(new LogEntry(DateTime.Now, level, message));
+    }
+
+    private void SetFilter(string f) => ActiveFilter = f;
+
+    private string FilterClass(string f) =>
+        "btn btn-filter" + (ActiveFilter == f ? " active" : "");
+
+    private IEnumerable<ImpactedScenario> FilteredScenarios()
+    {
+        if (Result is null) return Enumerable.Empty<ImpactedScenario>();
+        return ActiveFilter == "ALL"
+            ? Result.ImpactedScenarios
+            : Result.ImpactedScenarios.Where(s =>
+                s.Confidence.ToString().Equals(ActiveFilter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string RowClass(ConfidenceLevel c) => c switch
+    {
+        ConfidenceLevel.High   => "row-high",
+        ConfidenceLevel.Medium => "row-medium",
+        _                      => "row-verify"
+    };
+
+    private record LogEntry(DateTime Time, string Level, string Message);
+}

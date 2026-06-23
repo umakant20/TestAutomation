@@ -18,18 +18,21 @@ namespace PRImpactAnalyzer.Core.Pipeline;
 public class PromptBuilder
 {
     /// <summary>
-    /// Scenarios are pre-filtered to this max count to keep prompts pasteable.
-    /// If more than this many scenarios survive the keyword filter, the lowest-relevance
-    /// ones are dropped — rare in practice since the filter is already aggressive.
+    /// Global cap on how many scenarios survive the pre-filter across the WHOLE suite,
+    /// before chunking. With ChunkSize=80 in AnalysisPipeline, 400 here means at most
+    /// 5 chunks to paste — adjust both together if your suite needs more headroom.
     /// </summary>
-    private const int MaxScenariosPerPrompt = 120;
+    private const int MaxScenariosPerPrompt = 400;
 
     public string Build(
         PrMetadata prMetadata,
         List<ChangedSymbol> symbols,
         List<ScenarioRecord> scenarios)
     {
-        var relevant = PreFilterScenarios(symbols, scenarios);
+        // NOTE: `scenarios` here is expected to already be the pre-filtered, chunked
+        // subset — AnalysisPipeline.PrepareAsync calls PreFilter() once across the
+        // whole suite before chunking, so no filtering happens inside Build itself.
+        var relevant = scenarios;
 
         var sb = new StringBuilder();
 
@@ -86,7 +89,7 @@ public class PromptBuilder
         sb.AppendLine();
 
         // -- Scenarios -- single-line pipe-delimited, steps trimmed of keywords --
-        sb.AppendLine($"SCENARIOS ({relevant.Count} of {scenarios.Count} total - pre-filtered to those sharing a keyword with a changed symbol):");
+        sb.AppendLine($"SCENARIOS IN THIS CHUNK ({relevant.Count} — already pre-filtered to those sharing a keyword with a changed symbol):");
         foreach (var s in relevant)
         {
             var bound = string.Join(",", s.BoundEndpoints.Concat(s.BoundPageObjects).Concat(s.BoundSoapProxies));
@@ -105,8 +108,12 @@ public class PromptBuilder
     /// changed symbol - in the scenario name, steps, tags, or bound endpoint/page/proxy.
     /// This is the single biggest token saver: Copilot never sees scenarios that
     /// have no textual connection to anything that changed.
+    ///
+    /// Call this ONCE across the whole scenario list before chunking — filtering
+    /// inside each chunk independently has no effect, since every scenario already
+    /// belongs to some chunk by the time Build() runs.
     /// </summary>
-    private List<ScenarioRecord> PreFilterScenarios(List<ChangedSymbol> symbols, List<ScenarioRecord> scenarios)
+    public List<ScenarioRecord> PreFilter(List<ChangedSymbol> symbols, List<ScenarioRecord> scenarios)
     {
         if (symbols.Count == 0)
             return scenarios.Take(MaxScenariosPerPrompt).ToList();

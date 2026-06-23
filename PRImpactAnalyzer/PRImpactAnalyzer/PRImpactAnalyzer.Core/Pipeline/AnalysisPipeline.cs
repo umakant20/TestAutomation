@@ -97,8 +97,21 @@ public class AnalysisPipeline
             return prepared;
         }
 
-        // ── Build one prompt per chunk — no LLM call yet ────────────────────────
-        var chunks = ChunkScenarios(scenarios, ChunkSize);
+        // ── Pre-filter ONCE across the whole suite, then chunk only the survivors ──
+        // (Filtering must happen before chunking — filtering inside each chunk
+        // independently does nothing, since every scenario still ends up in some chunk.)
+        var relevantScenarios = _promptBuilder.PreFilter(symbols, scenarios);
+        _logger.LogInformation("Pre-filter kept {Relevant} of {Total} scenarios as relevant to the changed symbols.",
+            relevantScenarios.Count, scenarios.Count);
+
+        if (relevantScenarios.Count == 0)
+        {
+            prepared.Warning = "No scenarios shared any keyword with the changed symbols. " +
+                "This usually means the PR touches code with no matching test coverage, or symbol extraction found nothing useful — check the 'Changed Symbols' debug list.";
+            return prepared;
+        }
+
+        var chunks = ChunkScenarios(relevantScenarios, ChunkSize);
         for (int i = 0; i < chunks.Count; i++)
         {
             var prompt = _promptBuilder.Build(prDiff.Metadata, symbols, chunks[i]);

@@ -207,25 +207,34 @@
                 </div>
 
                 <div class="table-wrap">
-                    <table class="results-table">
-                        <thead>
-                            <tr><th>#</th><th>Scenario Name</th><th>Feature File</th><th>Matched Change</th><th>Confidence</th><th>Reason</th></tr>
-                        </thead>
-                        <tbody>
-                            @{ var filtered = FilteredScenarios(); int idx2 = 1; }
-                            @foreach (var scenario in filtered)
-                            {
-                                <tr class="@RowClass(scenario.Confidence)">
-                                    <td class="col-idx">@(idx2++)</td>
-                                    <td class="col-name"><strong>@scenario.ScenarioName</strong></td>
-                                    <td class="col-file"><code>@scenario.FeatureFile</code></td>
-                                    <td class="col-change">@scenario.MatchedChange</td>
-                                    <td class="col-conf"><span class="badge badge-@scenario.Confidence.ToString().ToLower()">@scenario.Confidence.ToString().ToUpper()</span></td>
-                                    <td class="col-reason">@scenario.Reason</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
+                    <div class="scenario-card-list">
+                        @{ var filtered = FilteredScenarios(); int idx2 = 1; }
+                        @foreach (var scenario in filtered)
+                        {
+                            <div class="scenario-result-card @RowClass(scenario.Confidence)">
+                                <div class="scenario-result-header">
+                                    <span class="col-idx">#@(idx2++)</span>
+                                    <strong class="scenario-result-name">@scenario.ScenarioName</strong>
+                                    <span class="badge badge-@scenario.Confidence.ToString().ToLower()">@scenario.Confidence.ToString().ToUpper()</span>
+                                </div>
+                                <div class="scenario-result-meta">
+                                    <span><strong>Feature:</strong> <code>@scenario.FeatureFile</code></span>
+                                    <span><strong>Matched change:</strong> @scenario.MatchedChange</span>
+                                </div>
+                                <div class="scenario-result-reason">
+                                    <strong>Why impacted:</strong>
+                                    @if (string.IsNullOrWhiteSpace(scenario.Reason))
+                                    {
+                                        <span class="reason-missing">⚠️ Copilot did not provide a reason for this match — treat as VERIFY and check manually.</span>
+                                    }
+                                    else
+                                    {
+                                        <span>@scenario.Reason</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
                 </div>
             </section>
         }

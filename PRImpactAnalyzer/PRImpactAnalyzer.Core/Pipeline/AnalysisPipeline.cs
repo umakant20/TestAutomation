@@ -146,7 +146,7 @@ public class AnalysisPipeline
         var impacted = chunkResults.SelectMany(r => r).ToList();
 
         var deduped = impacted
-            .GroupBy(s => s.ScenarioName)
+            .GroupBy(s => (s.FeatureFile, s.ScenarioName))
             .Select(g => g.OrderByDescending(s => s.Confidence).First())
             .OrderByDescending(s => s.Confidence)
             .ThenBy(s => s.FeatureFile)

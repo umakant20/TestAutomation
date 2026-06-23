@@ -200,3 +200,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 .chunk-preview-list { margin: 8px 0 0 0; padding-left: 18px; font-size: 12px; color: var(--text-muted); }
 .chunk-preview-list li { margin-bottom: 4px; }
+
+/* ── Legend box above final results table ────────────────────────────────── */
+.legend-box {
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 16px; font-size: 12px; color: var(--text-muted);
+}
+.legend-list { margin: 8px 0 0 0; padding-left: 18px; }
+.legend-list li { margin-bottom: 6px; line-height: 1.5; }
+.legend-list .badge { margin: 0 2px; }
+
+/* ── Feature tag in chunk preview list ────────────────────────────────────── */
+.feature-tag {
+    font-size: 10px; color: #a5b4fc; background: #1a1d36;
+    padding: 1px 6px; border-radius: 4px; margin-right: 4px;
+}

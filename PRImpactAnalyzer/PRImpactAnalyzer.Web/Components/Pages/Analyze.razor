@@ -149,7 +149,7 @@
                         <ul class="chunk-preview-list">
                             @foreach (var r in chunkResult)
                             {
-                                <li><strong>@r.ScenarioName</strong> — <span class="badge badge-@r.Confidence.ToString().ToLower()">@r.Confidence</span></li>
+                                <li><code class="feature-tag">@r.FeatureFile</code> <strong>@r.ScenarioName</strong> — <span class="badge badge-@r.Confidence.ToString().ToLower()">@r.Confidence</span></li>
                             }
                         </ul>
                     }
@@ -191,6 +191,19 @@
                         <button @onclick='() => SetFilter("MEDIUM")' class="@FilterClass("MEDIUM")">MEDIUM</button>
                         <button @onclick='() => SetFilter("VERIFY")' class="@FilterClass("VERIFY")">VERIFY</button>
                     </div>
+                </div>
+
+                <div class="legend-box">
+                    <strong>How to read this table:</strong>
+                    <ul class="legend-list">
+                        <li><strong>Matched Change</strong> — the specific changed symbol (method, route, ColdFusion page, SOAP operation) that Copilot linked this scenario to.</li>
+                        <li><strong>Confidence</strong> —
+                            <span class="badge badge-high">HIGH</span> scenario's bound code (endpoint/page/proxy) directly references a changed symbol;
+                            <span class="badge badge-medium">MEDIUM</span> scenario covers the same business behaviour as the change but without a direct code-level link;
+                            <span class="badge badge-verify">VERIFY</span> plausible connection — manually confirm before relying on it.
+                        </li>
+                        <li><strong>Reason</strong> — Copilot's one-line explanation for why this scenario was flagged.</li>
+                    </ul>
                 </div>
 
                 <div class="table-wrap">

@@ -95,9 +95,10 @@ public class ScenarioRecord
     public string FeatureTitle { get; set; } = string.Empty;
     public List<string> Tags { get; set; } = new();
     public List<string> Steps { get; set; } = new();
-    public List<string> BoundEndpoints { get; set; } = new();    // HTTP endpoint strings resolved from step defs
-    public List<string> BoundPageObjects { get; set; } = new();  // Selenium page object class names
-    public List<string> BoundSoapProxies { get; set; } = new();  // SOAP proxy/client class names
+    public List<string> BoundEndpoints { get; set; } = new();         // HTTP endpoint strings resolved from step defs
+    public List<string> BoundPageObjects { get; set; } = new();       // Selenium page object class names
+    public List<string> BoundSoapProxies { get; set; } = new();       // SOAP proxy/client class names
+    public List<string> BoundColdFusionPages { get; set; } = new();   // .cfm page filenames navigated to/from step defs (URLs, Page.Url consts, driver.Navigate calls)
     public bool IsOutline { get; set; }
 }
 

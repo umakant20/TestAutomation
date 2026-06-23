@@ -38,6 +38,7 @@ public class PromptBuilder
 
         // -- Compact system instructions (~60 tokens vs ~140 in the verbose version) --
         sb.AppendLine("Test impact analyzer for .NET/ColdFusion/SOAP code tested via C# SpecFlow/Reqnroll.");
+        sb.AppendLine("Do NOT ask clarifying questions or request more data. Use ONLY the data below. If a scenario lacks bound endpoints/page objects, match on scenario name/steps text alone and rate it M or V accordingly — never V because data is 'missing', only because the match itself is uncertain.");
         sb.AppendLine("Return ONLY this JSON, no prose, no markdown fences:");
         sb.AppendLine("{\"impacted\":[{\"s\":\"<scenario name>\",\"f\":\"<feature file>\",\"m\":\"<matched change>\",\"c\":\"H|M|V\",\"r\":\"<reason, <12 words>\"}]}");
         sb.AppendLine("c: H=direct symbol match, M=semantic/behavioral match, V=plausible but unconfirmed. Omit non-matches.");
@@ -92,7 +93,7 @@ public class PromptBuilder
         sb.AppendLine($"SCENARIOS IN THIS CHUNK ({relevant.Count} — already pre-filtered to those sharing a keyword with a changed symbol):");
         foreach (var s in relevant)
         {
-            var bound = string.Join(",", s.BoundEndpoints.Concat(s.BoundPageObjects).Concat(s.BoundSoapProxies));
+            var bound = string.Join(",", s.BoundEndpoints.Concat(s.BoundPageObjects).Concat(s.BoundSoapProxies).Concat(s.BoundColdFusionPages));
             var steps = CompactSteps(s.Steps);
 
             sb.AppendLine($"{s.ScenarioName} | {s.FeatureFile} | {bound} | {steps}");
@@ -133,7 +134,8 @@ public class PromptBuilder
                 .Concat(s.Steps)
                 .Concat(s.BoundEndpoints)
                 .Concat(s.BoundPageObjects)
-                .Concat(s.BoundSoapProxies))
+                .Concat(s.BoundSoapProxies)
+                .Concat(s.BoundColdFusionPages))
                 .ToLowerInvariant();
 
             var score = keywords.Count(k => haystack.Contains(k));

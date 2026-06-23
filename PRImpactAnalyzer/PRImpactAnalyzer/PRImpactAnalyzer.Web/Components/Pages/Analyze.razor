@@ -123,7 +123,7 @@
                 <div class="hint token-estimate">~@EstimateTokens(chunk.PromptText) tokens (rough estimate)</div>
 
                 <h4 style="margin-top:18px;">Paste Copilot's response here:</h4>
-                <textarea @bind="PastedResponses[idx]" rows="8" class="input-full" placeholder='{"impacted":[{"s":"...","f":"...","m":"...","c":"H","r":"..."}]}'></textarea>
+                <textarea value="@GetPastedResponse(idx)" @oninput="@(e => SetPastedResponse(idx, e.Value?.ToString() ?? string.Empty))" rows="8" class="input-full" placeholder='{"impacted":[{"s":"...","f":"...","m":"...","c":"H","r":"..."}]}'></textarea>
 
                 <div class="form-actions">
                     <button @onclick="() => ParseChunk(idx)" disabled="@(string.IsNullOrWhiteSpace(GetPastedResponse(idx)))" class="btn btn-primary">
@@ -333,6 +333,8 @@
     }
 
     private string GetPastedResponse(int idx) => PastedResponses.TryGetValue(idx, out var v) ? v : string.Empty;
+
+    private void SetPastedResponse(int idx, string value) => PastedResponses[idx] = value;
 
     private void ParseChunk(int idx)
     {

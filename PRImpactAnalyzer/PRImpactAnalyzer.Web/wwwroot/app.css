@@ -197,3 +197,6 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     color: var(--text); font-family: var(--font-mono); font-size: 12px; padding: 12px;
 }
 .token-estimate { margin-top: 4px; text-align: right; }
+
+.chunk-preview-list { margin: 8px 0 0 0; padding-left: 18px; font-size: 12px; color: var(--text-muted); }
+.chunk-preview-list li { margin-bottom: 4px; }

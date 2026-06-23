@@ -123,13 +123,37 @@
                 <div class="hint token-estimate">~@EstimateTokens(chunk.PromptText) tokens (rough estimate)</div>
 
                 <h4 style="margin-top:18px;">Paste Copilot's response here:</h4>
-                <textarea value="@GetPastedResponse(idx)" @oninput="@(e => SetPastedResponse(idx, e.Value?.ToString() ?? string.Empty))" rows="8" class="input-full" placeholder='{"impacted":[{"s":"...","f":"...","m":"...","c":"H","r":"..."}]}'></textarea>
+                <textarea value="@GetPastedResponse(idx)" @oninput="@(e => SetPastedResponse(idx, e.Value?.ToString() ?? string.Empty))" @onchange="@(e => SetPastedResponse(idx, e.Value?.ToString() ?? string.Empty))" rows="8" class="input-full" placeholder='{"impacted":[{"s":"...","f":"...","m":"...","c":"H","r":"..."}]}'></textarea>
 
                 <div class="form-actions">
                     <button @onclick="() => ParseChunk(idx)" disabled="@(string.IsNullOrWhiteSpace(GetPastedResponse(idx)))" class="btn btn-primary">
                         ✅ Parse Response
                     </button>
                 </div>
+
+                @if (ChunkResponses.TryGetValue(idx, out var chunkResult))
+                {
+                    @if (chunkResult.Count == 0)
+                    {
+                        <div class="status-bar status-info">Parsed OK — 0 impacted scenarios in this chunk.</div>
+                    }
+                    else if (chunkResult.Any(r => r.ScenarioName.StartsWith("[")))
+                    {
+                        <div class="status-bar status-error">
+                            ⚠️ Could not parse this response as valid JSON: @chunkResult[0].Reason
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="status-bar status-info">✅ @chunkResult.Count impacted scenario(s) found in this chunk:</div>
+                        <ul class="chunk-preview-list">
+                            @foreach (var r in chunkResult)
+                            {
+                                <li><strong>@r.ScenarioName</strong> — <span class="badge badge-@r.Confidence.ToString().ToLower()">@r.Confidence</span></li>
+                            }
+                        </ul>
+                    }
+                }
             </section>
         }
 
@@ -336,14 +360,37 @@
 
     private void SetPastedResponse(int idx, string value) => PastedResponses[idx] = value;
 
+    private string? LastParseFeedback { get; set; }
+
     private void ParseChunk(int idx)
     {
         var response = GetPastedResponse(idx);
-        if (string.IsNullOrWhiteSpace(response)) return;
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            LastParseFeedback = "Paste a response before parsing — the textbox is empty.";
+            return;
+        }
 
         var parsed = Pipeline.ParseChunkResponse(response);
         ChunkResponses[idx] = parsed;
-        Log("INFO", $"Chunk {idx + 1} parsed — {parsed.Count} impacted scenario(s) found in this chunk.");
+
+        if (parsed.Count == 0)
+        {
+            LastParseFeedback = $"Chunk {idx + 1}: parsed successfully — 0 impacted scenarios in this chunk. " +
+                "(This is expected if none of this chunk's scenarios matched a changed symbol.)";
+            Log("INFO", $"Chunk {idx + 1} parsed — 0 impacted scenarios (empty array, not an error).");
+        }
+        else if (parsed.Any(p => p.ScenarioName.StartsWith("[")))
+        {
+            LastParseFeedback = $"Chunk {idx + 1}: could not parse the pasted text as valid JSON. " +
+                "Check that you copied Copilot's full reply, including the opening { and closing }.";
+            Log("ERROR", $"Chunk {idx + 1} parse failed: {parsed[0].Reason}");
+        }
+        else
+        {
+            LastParseFeedback = $"Chunk {idx + 1}: parsed successfully — {parsed.Count} impacted scenario(s) found.";
+            Log("INFO", $"Chunk {idx + 1} parsed — {parsed.Count} impacted scenario(s) found in this chunk.");
+        }
     }
 
     private void FinalizeResults()

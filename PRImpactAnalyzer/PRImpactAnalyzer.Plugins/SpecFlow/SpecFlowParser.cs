@@ -6,8 +6,8 @@ namespace PRImpactAnalyzer.Plugins.SpecFlow;
 
 /// <summary>
 /// Parses .feature files and enriches each scenario with bound endpoint, page object,
-/// SOAP proxy, and ColdFusion page references found in the co-located *Steps.cs /
-/// *StepDefinitions.cs files. Works for both SpecFlow and Reqnroll (same syntax).
+/// SOAP proxy, ColdFusion page, and Selenium selector references found in the co-located
+/// *Steps.cs / *StepDefinitions.cs files. Works for both SpecFlow and Reqnroll (same syntax).
 /// </summary>
 public class SpecFlowParser : ITestParser
 {
@@ -43,11 +43,22 @@ public class SpecFlowParser : ITestParser
     // Catches ColdFusion page references in step defs / page objects in any of these forms:
     //   driver.Navigate().GoToUrl("https://app.example.com/new_pending.cfm")
     //   public const string Url = "/orders/new_pending.cfm";
-    //   driver.FindElement(By...).Click(); // followed by a literal containing "checkout.cfm"
-    // We simply pull out any quoted string literal ending in .cfm, anywhere in the chunk.
     private static readonly Regex CfPagePattern = new(
         @"[""']([^""']*?([\w\-]+\.cfm))[""']",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Catches Selenium locator literals — the values these step defs / page objects actually
+    // search the DOM for. This is what lets MarkupSelectorAnalyzer's extracted id/class/
+    // data-testid/name attribute changes connect to a real test scenario: a step that does
+    // By.Id("orderSubmitBtn") binds this scenario to the selector "orderSubmitBtn", so if a
+    // PR changes that id in markup, this scenario shows up as a genuine code-level match.
+    //   By.Id("orderSubmitBtn")           -> orderSubmitBtn
+    //   By.ClassName("btn-primary")       -> btn-primary
+    //   By.Name("email")                  -> email
+    //   By.CssSelector("[data-testid='submit-order']") -> submit-order
+    private static readonly Regex SelectorPattern = new(
+        @"By\.(?:Id|ClassName|Name)\(\s*""([^""]+)""\s*\)|By\.CssSelector\(\s*""[^""]*?data-test(?:id)?=['""]?([^'""\]]+)['""]?[^""]*""\s*\)",
+        RegexOptions.Compiled);
 
     public bool CanParse(string testRepoPath)
     {
@@ -59,8 +70,6 @@ public class SpecFlowParser : ITestParser
     {
         var featureFiles = Directory.GetFiles(testRepoPath, "*.feature", SearchOption.AllDirectories);
 
-        // Step definitions AND page object classes both get scanned for .cfm references —
-        // page objects often hold the Url constant rather than the step def itself.
         var csFiles = Directory.GetFiles(testRepoPath, "*.cs", SearchOption.AllDirectories).ToList();
         var stepFiles = csFiles
             .Where(f => f.IndexOf("step", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -113,14 +122,17 @@ public class SpecFlowParser : ITestParser
                         record.BoundPageObjects.AddRange(binding.Pages);
                         record.BoundSoapProxies.AddRange(binding.Proxies);
                         record.BoundColdFusionPages.AddRange(binding.CfPages);
+                        record.BoundSelectors.AddRange(binding.Selectors);
 
-                        // A step that constructs a known page object (e.g. "new NewOrderPage(driver)")
-                        // also inherits that page object's own .cfm references, even if the step
-                        // text itself didn't literally contain ".cfm" anywhere.
+                        // A step that constructs a known page object also inherits that page
+                        // object's own .cfm references and selector references, even if the
+                        // step text/binding itself never mentions them directly.
                         foreach (var pageName in binding.Pages)
                         {
                             if (pageObjectCfPages.TryGetValue(pageName, out var cfPagesForThisPageObject))
                                 record.BoundColdFusionPages.AddRange(cfPagesForThisPageObject);
+                            if (pageObjectSelectors.TryGetValue(pageName, out var selectorsForThisPageObject))
+                                record.BoundSelectors.AddRange(selectorsForThisPageObject);
                         }
                     }
                 }
@@ -129,6 +141,7 @@ public class SpecFlowParser : ITestParser
                 record.BoundPageObjects       = record.BoundPageObjects.Distinct().ToList();
                 record.BoundSoapProxies       = record.BoundSoapProxies.Distinct().ToList();
                 record.BoundColdFusionPages   = record.BoundColdFusionPages.Distinct().ToList();
+                record.BoundSelectors         = record.BoundSelectors.Distinct().ToList();
 
                 yield return record;
             }
@@ -137,19 +150,21 @@ public class SpecFlowParser : ITestParser
 
     // ── Step definition enrichment ────────────────────────────────────────────
 
-    private record BindingEntry(string Pattern, List<string> Endpoints, List<string> Pages, List<string> Proxies, List<string> CfPages);
+    private record BindingEntry(string Pattern, List<string> Endpoints, List<string> Pages, List<string> Proxies, List<string> CfPages, List<string> Selectors);
 
-    // Maps a page object class name (e.g. "NewOrderPage") -> the .cfm page(s) it navigates to.
+    // Maps a page object class name -> the .cfm page(s) / selector(s) it references.
     // Populated once in BuildBindingMap, consulted during enrichment so a step that merely
-    // instantiates the page object still picks up that page's .cfm reference.
+    // instantiates the page object still picks up that page's references.
     private Dictionary<string, List<string>> pageObjectCfPages = new();
+    private Dictionary<string, List<string>> pageObjectSelectors = new();
 
     private List<BindingEntry> BuildBindingMap(List<string> stepFiles, List<string> pageObjectFiles)
     {
-        // First pass: scan page object files for their own .cfm references, keyed by class name.
-        // This lets us connect "new CheckoutPage(driver)" in a step def to checkout.cfm even if
-        // the step def file itself never mentions the .cfm filename directly.
+        // First pass: scan page object files for their own .cfm references and selector
+        // literals, keyed by class name.
         pageObjectCfPages = new Dictionary<string, List<string>>();
+        pageObjectSelectors = new Dictionary<string, List<string>>();
+
         foreach (var file in pageObjectFiles)
         {
             var content = File.ReadAllText(file);
@@ -157,17 +172,25 @@ public class SpecFlowParser : ITestParser
             if (!classMatch.Success) continue;
 
             var className = classMatch.Groups[1].Value;
+
             var cfPages = CfPagePattern.Matches(content)
                 .Select(m => Path.GetFileName(m.Groups[1].Value))
                 .Distinct()
                 .ToList();
-
             if (cfPages.Any())
                 pageObjectCfPages[className] = cfPages;
+
+            var selectors = SelectorPattern.Matches(content)
+                .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct()
+                .ToList();
+            if (selectors.Any())
+                pageObjectSelectors[className] = selectors;
         }
 
         // Second pass: scan step definition files for bindings, endpoints, page object
-        // construction, SOAP proxies, and any direct .cfm references in the step def itself.
+        // construction, SOAP proxies, ColdFusion references, and selector literals.
         var map = new List<BindingEntry>();
 
         foreach (var file in stepFiles)
@@ -188,8 +211,13 @@ public class SpecFlowParser : ITestParser
                                     .Select(m => Path.GetFileName(m.Groups[1].Value))
                                     .Distinct()
                                     .ToList();
+                var selectors = SelectorPattern.Matches(chunk)
+                                    .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)
+                                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                                    .Distinct()
+                                    .ToList();
 
-                map.Add(new BindingEntry(bindings[i].Groups["pattern"].Value, endpoints, pages, proxies, cfPages));
+                map.Add(new BindingEntry(bindings[i].Groups["pattern"].Value, endpoints, pages, proxies, cfPages, selectors));
             }
         }
 

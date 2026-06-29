@@ -30,6 +30,16 @@ public class FileDiff
     public string FilePath { get; set; } = string.Empty;
     public FileChangeType ChangeType { get; set; }
     public List<HunkDiff> Hunks { get; set; } = new();
+
+    /// <summary>
+    /// Full file content at the PR's target branch (before the change) and source
+    /// branch (after the change). Needed by any analyzer that requires a syntactically
+    /// complete file to parse — e.g. Roslyn cannot parse a diff fragment of +/- lines,
+    /// only a real, complete source file. Regex-based analyzers can ignore these and
+    /// keep using Hunks; AST-based analyzers (DotNetAnalyzer) use these instead.
+    /// </summary>
+    public string OldContent { get; set; } = string.Empty;
+    public string NewContent { get; set; } = string.Empty;
 }
 
 public enum FileChangeType { Added, Modified, Deleted, Renamed }
@@ -60,7 +70,10 @@ public enum SymbolKind
     SoapOperation,
     ColdFusionFunction,
     ColdFusionField,
-    ColdFusionPage
+    ColdFusionPage,
+    JsFunction,        // Node.js/JS/TS exported function or module export
+    MarkupSelector,    // id / class / data-testid / name attribute from HTML, JSX, or any markup-producing template
+    ConfigValue         // a scoped, test-relevant key from an explicitly-allowlisted XML/JSON config file
 }
 
 public enum ChangeType
@@ -99,6 +112,7 @@ public class ScenarioRecord
     public List<string> BoundPageObjects { get; set; } = new();       // Selenium page object class names
     public List<string> BoundSoapProxies { get; set; } = new();       // SOAP proxy/client class names
     public List<string> BoundColdFusionPages { get; set; } = new();   // .cfm page filenames navigated to/from step defs (URLs, Page.Url consts, driver.Navigate calls)
+    public List<string> BoundSelectors { get; set; } = new();         // Selenium By.Id/By.ClassName/By.Name/CSS selector literal values referenced in step defs or page objects
     public bool IsOutline { get; set; }
 }
 

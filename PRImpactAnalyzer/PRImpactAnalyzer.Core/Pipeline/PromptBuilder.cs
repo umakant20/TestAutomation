@@ -81,6 +81,9 @@ public class PromptBuilder
                     SymbolKind.ColdFusionFunction => "cffn",
                     SymbolKind.ColdFusionField => "cffield",
                     SymbolKind.ColdFusionPage => "cfpage",
+                    SymbolKind.JsFunction => "jsfn",
+                    SymbolKind.MarkupSelector => "selector",
+                    SymbolKind.ConfigValue => "config",
                     _ => "sym"
                 };
 
@@ -93,7 +96,7 @@ public class PromptBuilder
         sb.AppendLine($"SCENARIOS IN THIS CHUNK ({relevant.Count} — already pre-filtered to those sharing a keyword with a changed symbol):");
         foreach (var s in relevant)
         {
-            var bound = string.Join(",", s.BoundEndpoints.Concat(s.BoundPageObjects).Concat(s.BoundSoapProxies).Concat(s.BoundColdFusionPages));
+            var bound = string.Join(",", s.BoundEndpoints.Concat(s.BoundPageObjects).Concat(s.BoundSoapProxies).Concat(s.BoundColdFusionPages).Concat(s.BoundSelectors));
             var steps = CompactSteps(s.Steps);
 
             sb.AppendLine($"{s.ScenarioName} | {s.FeatureFile} | {bound} | {steps}");
@@ -135,7 +138,8 @@ public class PromptBuilder
                 .Concat(s.BoundEndpoints)
                 .Concat(s.BoundPageObjects)
                 .Concat(s.BoundSoapProxies)
-                .Concat(s.BoundColdFusionPages))
+                .Concat(s.BoundColdFusionPages)
+                .Concat(s.BoundSelectors))
                 .ToLowerInvariant();
 
             var score = keywords.Count(k => haystack.Contains(k));

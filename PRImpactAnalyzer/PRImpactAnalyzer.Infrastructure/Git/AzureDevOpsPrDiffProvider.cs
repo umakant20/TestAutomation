@@ -169,7 +169,9 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
         {
             FilePath = path.TrimStart('/'),
             ChangeType = changeType,
-            Hunks = hunks
+            Hunks = hunks,
+            OldContent = oldContent,
+            NewContent = newContent
         };
     }
 

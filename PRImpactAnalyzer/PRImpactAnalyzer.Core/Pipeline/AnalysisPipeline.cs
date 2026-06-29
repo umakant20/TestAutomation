@@ -63,17 +63,24 @@ public class AnalysisPipeline
         var symbols = new List<ChangedSymbol>();
         foreach (var fileDiff in prDiff.Files)
         {
-            var analyzer = _codeAnalyzers.FirstOrDefault(a => a.CanAnalyze(fileDiff.FilePath));
-            if (analyzer is null)
+            // Run every analyzer that claims this file, not just the first match.
+            // A .cs file under a "Service" folder, for example, is legitimately both a
+            // candidate for Roslyn method extraction AND SOAP operation extraction —
+            // picking only one would silently drop real symbols the other could find.
+            var matchingAnalyzers = _codeAnalyzers.Where(a => a.CanAnalyze(fileDiff.FilePath)).ToList();
+            if (matchingAnalyzers.Count == 0)
             {
                 _logger.LogDebug("No analyzer for {File}, skipping symbol extraction", fileDiff.FilePath);
                 continue;
             }
 
-            var extracted = analyzer.ExtractSymbols(fileDiff).ToList();
-            _logger.LogInformation("{Analyzer} extracted {Count} symbols from {File}",
-                analyzer.Name, extracted.Count, fileDiff.FilePath);
-            symbols.AddRange(extracted);
+            foreach (var analyzer in matchingAnalyzers)
+            {
+                var extracted = analyzer.ExtractSymbols(fileDiff).ToList();
+                _logger.LogInformation("{Analyzer} extracted {Count} symbols from {File}",
+                    analyzer.Name, extracted.Count, fileDiff.FilePath);
+                symbols.AddRange(extracted);
+            }
         }
 
         prepared.ChangedSymbols = symbols;

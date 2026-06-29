@@ -3,7 +3,10 @@ using PRImpactAnalyzer.Core.Pipeline;
 using PRImpactAnalyzer.Infrastructure.Git;
 using PRImpactAnalyzer.Infrastructure.Http;
 using PRImpactAnalyzer.Plugins.ColdFusion;
+using PRImpactAnalyzer.Plugins.Config;
 using PRImpactAnalyzer.Plugins.DotNet;
+using PRImpactAnalyzer.Plugins.Markup;
+using PRImpactAnalyzer.Plugins.NodeJs;
 using PRImpactAnalyzer.Plugins.Soap;
 using PRImpactAnalyzer.Plugins.SpecFlow;
 using PRImpactAnalyzer.Web.Components;
@@ -25,8 +28,11 @@ builder.Services.AddScoped<ManualCopilotBridgeOrchestrator>();
 
 // ── Plugins ──────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<ICodeAnalyzer, SoapWsdlAnalyzer>();
-builder.Services.AddSingleton<ICodeAnalyzer, DotNetAnalyzer>();
+builder.Services.AddSingleton<ICodeAnalyzer, DotNetAnalyzer>();       // now Roslyn-based — see DotNetAnalyzer.cs
 builder.Services.AddSingleton<ICodeAnalyzer, ColdFusionAnalyzer>();
+builder.Services.AddSingleton<ICodeAnalyzer, NodeJsAnalyzer>();       // Express/NestJS routes + exported functions
+builder.Services.AddSingleton<ICodeAnalyzer, MarkupSelectorAnalyzer>(); // shared HTML/JSX/Vue/Angular selector extractor
+builder.Services.AddSingleton<ICodeAnalyzer, XmlConfigAnalyzer>();    // scoped/allowlisted — see XmlConfigAnalyzer.FileNamePatterns
 builder.Services.AddSingleton<ITestParser,   SpecFlowParser>();
 
 // ── Pipeline ─────────────────────────────────────────────────────────────────

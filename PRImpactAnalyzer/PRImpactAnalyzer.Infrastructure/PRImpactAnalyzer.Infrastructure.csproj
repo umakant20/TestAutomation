@@ -3,6 +3,12 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- GitHub.Copilot.SDK marks several preview types (incl. PermissionDecision) with the
+         [Experimental] attribute. We deliberately use them — this is the intended, documented
+         API for handling tool-permission requests — so the warning is suppressed rather than
+         worked around. Replace GHCOPILOT001 with the exact diagnostic ID shown in your build
+         output / Error List "Code" column if it differs (SDK versions can change the ID). -->
+    <NoWarn>$(NoWarn);GHCOPILOT001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

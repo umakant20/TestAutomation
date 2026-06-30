@@ -66,6 +66,14 @@ public sealed class CopilotSdkOrchestrator : ILlmOrchestrator, IAsyncDisposable
         await EnsureStartedAsync(cancellationToken);
 
         // One session per prompt chunk — cheap, and gives each chunk an isolated context.
+        //
+        // NOTE: PermissionDecision is marked [Experimental] by the SDK (preview API surface),
+        // which the compiler flags unless suppressed. This is suppressed project-wide via
+        // <NoWarn>GHCOPILOT001</NoWarn> in this project's .csproj. If you'd rather suppress
+        // only at this exact call site instead, wrap it like:
+        //   #pragma warning disable GHCOPILOT001
+        //   ... the OnPermissionRequest line below ...
+        //   #pragma warning restore GHCOPILOT001
         await using var session = await _client!.CreateSessionAsync(new SessionConfig
         {
             Model = _model,

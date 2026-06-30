@@ -70,9 +70,11 @@ public sealed class CopilotSdkOrchestrator : ILlmOrchestrator, IAsyncDisposable
         {
             Model = _model,
             // The analysis prompt never needs tools — it's pure read-the-text-and-return-JSON.
-            // Denying all tool calls is the correct, safe default for this headless use.
+            // PermissionDecision is a discriminated union (factory methods, not a plain enum);
+            // Reject(...) is the correct call to deny every tool request. The model doesn't
+            // need any tool to answer our prompt, so this is a safe no-op in practice.
             OnPermissionRequest = (request, invocation) =>
-                Task.FromResult(PermissionDecision.Denied),
+                Task.FromResult(PermissionDecision.Reject("This automated analysis run does not grant any tool permissions.")),
         });
 
         var responseBuilder = new System.Text.StringBuilder();

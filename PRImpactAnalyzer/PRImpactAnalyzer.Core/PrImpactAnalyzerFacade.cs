@@ -48,7 +48,12 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
         services.AddLogging(lb =>
         {
             configureLogging?.Invoke(lb);
-            if (configureLogging is null) lb.AddConsole();
+            // Fully-qualified call (rather than relying on extension-method resolution via
+            // `using`) so this compiles even if a stale obj/bin cache or partial restore
+            // hasn't picked up the Microsoft.Extensions.Logging.Console package reference yet.
+            // If this line itself fails to resolve, it confirms the package truly isn't
+            // restored — run "Restore NuGet Packages" (or `dotnet restore`) on the solution.
+            if (configureLogging is null) Microsoft.Extensions.Logging.ConsoleLoggerExtensions.AddConsole(lb);
         });
         registerServices(services);
         var provider = services.BuildServiceProvider();

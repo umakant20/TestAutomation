@@ -56,14 +56,15 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
         {
             Metadata = prMeta,
             Files = fileDiffs,
-            RawDiffText = string.Join("\n", fileDiffs.SelectMany(f =>
-                f.Hunks.SelectMany(h => h.Lines.Select(l =>
+            RawDiffText = string.Join("\n\n", fileDiffs.Select(f =>
+                $"=== {f.FilePath} ({f.ChangeType}) ===\n" +
+                string.Join("\n", f.Hunks.SelectMany(h => h.Lines.Select(l =>
                     l.Type switch
                     {
                         DiffLineType.Added   => "+ " + l.Content,
                         DiffLineType.Removed => "- " + l.Content,
                         _                    => "  " + l.Content
-                    }))))
+                    })))))
         };
     }
 

@@ -141,9 +141,29 @@ public class AnalysisResult
     public List<ChangedSymbol> ChangedSymbols { get; set; } = new();
     public List<ScenarioRecord> AllScenarios { get; set; } = new();
     public List<ImpactedScenario> ImpactedScenarios { get; set; } = new();
+
+    /// <summary>Last chunk's prompt/response — kept for backward compatibility and quick debugging.</summary>
     public string? RawLlmPrompt { get; set; }
     public string? RawLlmResponse { get; set; }
+
+    /// <summary>The raw unified diff text fetched from the PR (shown in the HTML report).</summary>
+    public string RawDiffText { get; set; } = string.Empty;
+
+    /// <summary>Every prompt sent to the LLM and the raw response it returned, one entry per chunk.</summary>
+    public List<LlmExchange> LlmExchanges { get; set; } = new();
+
     public DateTime AnalyzedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>One prompt-and-response pair for a single chunk, captured for the report.</summary>
+public class LlmExchange
+{
+    public int ChunkIndex { get; set; }
+    public int TotalChunks { get; set; }
+    public int ScenarioCount { get; set; }
+    public string Prompt { get; set; } = string.Empty;
+    public string RawResponse { get; set; } = string.Empty;
+    public int ParsedImpactedCount { get; set; }
 }
 
 public class ImpactedScenario

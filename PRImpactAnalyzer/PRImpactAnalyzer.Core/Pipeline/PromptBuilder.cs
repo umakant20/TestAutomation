@@ -30,7 +30,7 @@ public class PromptBuilder
         List<ScenarioRecord> scenarios)
     {
         // NOTE: `scenarios` here is expected to already be the pre-filtered, chunked
-        // subset — AnalysisPipeline.PrepareAsync calls PreFilter() once across the
+        // subset — AnalysisPipeline.RunAsync calls PreFilter() once across the
         // whole suite before chunking, so no filtering happens inside Build itself.
         var relevant = scenarios;
 

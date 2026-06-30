@@ -7,8 +7,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PRImpactAnalyzer.Core\PRImpactAnalyzer.Core.csproj" />
+    <!-- Infrastructure's DI registration helper wires up the plugin analyzers, so it
+         references the Plugins project directly. -->
+    <ProjectReference Include="..\PRImpactAnalyzer.Plugins\PRImpactAnalyzer.Plugins.csproj" />
     <!-- Azure DevOps REST API client -->
     <PackageReference Include="Microsoft.TeamFoundationServer.Client" Version="19.225.1" />
     <PackageReference Include="Microsoft.VisualStudio.Services.Client" Version="19.225.1" />
+    <!-- GitHub Copilot SDK: programmatic access to the Copilot agent runtime via the
+         bundled Copilot CLI. Replaces the old manual paste bridge entirely. -->
+    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.44" />
+    <!-- DI abstractions for the registration extension -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
   </ItemGroup>
 </Project>

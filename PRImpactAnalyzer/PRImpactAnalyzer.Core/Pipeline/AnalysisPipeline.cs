@@ -5,36 +5,38 @@ using PRImpactAnalyzer.Core.Models;
 namespace PRImpactAnalyzer.Core.Pipeline;
 
 /// <summary>
-/// Orchestrates the analysis pipeline, split into two explicit steps so the UI can
-/// pause between them for the manual Copilot Chat paste step:
+/// Orchestrates the full PR test-impact analysis in a single automated call, designed to be
+/// invoked as a library from a test framework, CI step, or CLI — no UI, no manual paste.
 ///
-///   Step A — PrepareAsync: Phase 1 (fetch PR diff, extract symbols) + Phase 2
-///            (scan test repo, build scenario index) + builds the prompt(s).
-///            Returns a PreparedAnalysis with one prompt per chunk, ready to paste
-///            into Visual Studio's Copilot Chat window.
+/// The pipeline runs three phases end to end:
+///   Phase 1 — fetch the PR diff and extract changed symbols (via the registered ICodeAnalyzers)
+///   Phase 2 — scan the local test repo for scenarios (via the registered ITestParser)
+///   Phase 3 — pre-filter scenarios, chunk them, send each chunk to the LLM (ILlmOrchestrator),
+///             parse each response, then dedupe and rank into a final report
 ///
-///   Step B — CompleteAsync: takes the pasted Copilot response(s) for each chunk
-///            and runs Phase 3 (parse JSON, dedupe, rank by confidence).
-///
-/// This split means the UI never needs to "block" on an open HTTP call — it shows
-/// the prepared prompt, waits for you to paste a response and click a button, then
-/// calls CompleteAsync synchronously per chunk.
+/// The ILlmOrchestrator dependency is what makes this fully automated: it is now backed by the
+/// GitHub Copilot SDK (CopilotSdkOrchestrator), so the prompt-send/response-parse loop that used
+/// to be a manual copy/paste is a real programmatic call.
 /// </summary>
 public class AnalysisPipeline
 {
     private readonly IPrDiffProvider _prDiffProvider;
     private readonly IEnumerable<ICodeAnalyzer> _codeAnalyzers;
     private readonly IEnumerable<ITestParser> _testParsers;
+    private readonly ILlmOrchestrator _llm;
     private readonly PromptBuilder _promptBuilder;
     private readonly LlmResponseParser _responseParser;
     private readonly ILogger<AnalysisPipeline> _logger;
 
-    private const int ChunkSize = 80; // scenarios per prompt — keeps each paste pasteable in Copilot Chat
+    // Scenarios per LLM call. Larger than the old manual-paste limit since there's no human
+    // pasting now — bounded mainly by model context and per-request token cost.
+    private const int ChunkSize = 80;
 
     public AnalysisPipeline(
         IPrDiffProvider prDiffProvider,
         IEnumerable<ICodeAnalyzer> codeAnalyzers,
         IEnumerable<ITestParser> testParsers,
+        ILlmOrchestrator llm,
         PromptBuilder promptBuilder,
         LlmResponseParser responseParser,
         ILogger<AnalysisPipeline> logger)
@@ -42,133 +44,131 @@ public class AnalysisPipeline
         _prDiffProvider = prDiffProvider;
         _codeAnalyzers = codeAnalyzers;
         _testParsers = testParsers;
+        _llm = llm;
         _promptBuilder = promptBuilder;
         _responseParser = responseParser;
         _logger = logger;
     }
 
     /// <summary>
-    /// Step A — runs Phase 1 + Phase 2 and builds one prompt per scenario chunk.
-    /// No LLM call happens here. The caller pastes each prompt into Copilot Chat manually.
+    /// Runs the complete analysis and returns the ranked, de-duplicated impacted-scenario report.
+    /// This is the single entry point for library/CI/CLI callers.
     /// </summary>
-    public async Task<PreparedAnalysis> PrepareAsync(AnalysisRequest request, CancellationToken cancellationToken = default)
+    public async Task<AnalysisResult> RunAsync(AnalysisRequest request, CancellationToken cancellationToken = default)
     {
-        var prepared = new PreparedAnalysis();
+        var result = new AnalysisResult();
 
-        // ── Phase 1: Fetch PR diff and extract symbols ──────────────────────────
-        _logger.LogInformation("Phase 1: Fetching PR diff from Azure DevOps…");
-        var prDiff = await _prDiffProvider.GetDiffAsync(request, cancellationToken);
-        prepared.PrMetadata = prDiff.Metadata;
-
-        var symbols = new List<ChangedSymbol>();
-        foreach (var fileDiff in prDiff.Files)
+        try
         {
-            // Run every analyzer that claims this file, not just the first match.
-            // A .cs file under a "Service" folder, for example, is legitimately both a
-            // candidate for Roslyn method extraction AND SOAP operation extraction —
-            // picking only one would silently drop real symbols the other could find.
-            var matchingAnalyzers = _codeAnalyzers.Where(a => a.CanAnalyze(fileDiff.FilePath)).ToList();
-            if (matchingAnalyzers.Count == 0)
+            // ── Phase 1: Fetch PR diff and extract symbols ──────────────────────────
+            _logger.LogInformation("Phase 1: Fetching PR diff from Azure DevOps…");
+            var prDiff = await _prDiffProvider.GetDiffAsync(request, cancellationToken);
+            result.PrMetadata = prDiff.Metadata;
+            result.RawDiffText = prDiff.RawDiffText;
+
+            var symbols = new List<ChangedSymbol>();
+            foreach (var fileDiff in prDiff.Files)
             {
-                _logger.LogDebug("No analyzer for {File}, skipping symbol extraction", fileDiff.FilePath);
-                continue;
+                // Run every analyzer that claims this file, not just the first match —
+                // a .cs SOAP service file needs both Roslyn method and SOAP operation extraction.
+                var matchingAnalyzers = _codeAnalyzers.Where(a => a.CanAnalyze(fileDiff.FilePath)).ToList();
+                if (matchingAnalyzers.Count == 0)
+                {
+                    _logger.LogDebug("No analyzer for {File}", fileDiff.FilePath);
+                    continue;
+                }
+
+                foreach (var analyzer in matchingAnalyzers)
+                {
+                    var extracted = analyzer.ExtractSymbols(fileDiff).ToList();
+                    _logger.LogInformation("{Analyzer} extracted {Count} symbols from {File}",
+                        analyzer.Name, extracted.Count, fileDiff.FilePath);
+                    symbols.AddRange(extracted);
+                }
             }
 
-            foreach (var analyzer in matchingAnalyzers)
+            result.ChangedSymbols = symbols;
+            _logger.LogInformation("Phase 1 complete. {Count} changed symbols.", symbols.Count);
+
+            // ── Phase 2: Scan test repo ──────────────────────────────────────────────
+            _logger.LogInformation("Phase 2: Scanning test repo at {Path}…", request.TestRepoLocalPath);
+
+            var parser = _testParsers.FirstOrDefault(p => p.CanParse(request.TestRepoLocalPath))
+                ?? throw new InvalidOperationException(
+                    $"No test parser can handle the repo at '{request.TestRepoLocalPath}'. " +
+                    "Ensure the SpecFlow/Reqnroll parser plugin is registered.");
+
+            var scenarios = parser.ParseScenarios(request.TestRepoLocalPath).ToList();
+            result.AllScenarios = scenarios;
+            _logger.LogInformation("Phase 2 complete. {Count} scenarios found.", scenarios.Count);
+
+            if (scenarios.Count == 0)
             {
-                var extracted = analyzer.ExtractSymbols(fileDiff).ToList();
-                _logger.LogInformation("{Analyzer} extracted {Count} symbols from {File}",
-                    analyzer.Name, extracted.Count, fileDiff.FilePath);
-                symbols.AddRange(extracted);
+                result.Success = true;
+                result.ErrorMessage = "No test scenarios found in the test repo path.";
+                return result;
             }
-        }
 
-        prepared.ChangedSymbols = symbols;
-        _logger.LogInformation("Phase 1 complete. {Count} total changed symbols extracted.", symbols.Count);
+            // ── Phase 3: Pre-filter, chunk, call LLM per chunk, parse, merge ─────────
+            var relevant = _promptBuilder.PreFilter(symbols, scenarios);
+            _logger.LogInformation("Pre-filter kept {Relevant} of {Total} scenarios.", relevant.Count, scenarios.Count);
 
-        // ── Phase 2: Scan test repo ──────────────────────────────────────────────
-        _logger.LogInformation("Phase 2: Scanning test repo at {Path}…", request.TestRepoLocalPath);
-
-        var parser = _testParsers.FirstOrDefault(p => p.CanParse(request.TestRepoLocalPath))
-            ?? throw new InvalidOperationException(
-                $"No test parser found that can handle the repo at '{request.TestRepoLocalPath}'. " +
-                "Ensure the SpecFlow/Reqnroll parser plugin is registered.");
-
-        var scenarios = parser.ParseScenarios(request.TestRepoLocalPath).ToList();
-        prepared.AllScenarios = scenarios;
-        _logger.LogInformation("Phase 2 complete. {Count} scenarios found.", scenarios.Count);
-
-        if (scenarios.Count == 0)
-        {
-            prepared.Warning = "No test scenarios found in the test repo path. Check the path and ensure .feature files exist.";
-            return prepared;
-        }
-
-        // ── Pre-filter ONCE across the whole suite, then chunk only the survivors ──
-        // (Filtering must happen before chunking — filtering inside each chunk
-        // independently does nothing, since every scenario still ends up in some chunk.)
-        var relevantScenarios = _promptBuilder.PreFilter(symbols, scenarios);
-        _logger.LogInformation("Pre-filter kept {Relevant} of {Total} scenarios as relevant to the changed symbols.",
-            relevantScenarios.Count, scenarios.Count);
-
-        if (relevantScenarios.Count == 0)
-        {
-            prepared.Warning = "No scenarios shared any keyword with the changed symbols. " +
-                "This usually means the PR touches code with no matching test coverage, or symbol extraction found nothing useful — check the 'Changed Symbols' debug list.";
-            return prepared;
-        }
-
-        var chunks = ChunkScenarios(relevantScenarios, ChunkSize);
-        for (int i = 0; i < chunks.Count; i++)
-        {
-            var prompt = _promptBuilder.Build(prDiff.Metadata, symbols, chunks[i]);
-            prepared.PromptChunks.Add(new PromptChunk
+            if (relevant.Count == 0)
             {
-                ChunkIndex = i,
-                TotalChunks = chunks.Count,
-                PromptText = prompt,
-                ScenarioCount = chunks[i].Count
-            });
+                result.Success = true;
+                result.ImpactedScenarios = new();
+                result.ErrorMessage = "No scenarios shared any keyword with the changed symbols (no matching test coverage, or symbol extraction found nothing useful).";
+                return result;
+            }
+
+            var chunks = ChunkScenarios(relevant, ChunkSize);
+            var impacted = new List<ImpactedScenario>();
+
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var prompt = _promptBuilder.Build(prDiff.Metadata, symbols, chunks[i]);
+                result.RawLlmPrompt = prompt; // last chunk's prompt, kept for debugging
+
+                _logger.LogInformation("Phase 3: Sending chunk {Index}/{Total} to Copilot…", i + 1, chunks.Count);
+                var rawResponse = await _llm.GetCompletionAsync(prompt, cancellationToken);
+                result.RawLlmResponse = rawResponse;
+
+                var parsedForChunk = _responseParser.Parse(rawResponse);
+                impacted.AddRange(parsedForChunk);
+
+                // Capture the full exchange so the HTML report can show exactly what was
+                // sent and received for every chunk, not just the last one.
+                result.LlmExchanges.Add(new LlmExchange
+                {
+                    ChunkIndex = i,
+                    TotalChunks = chunks.Count,
+                    ScenarioCount = chunks[i].Count,
+                    Prompt = prompt,
+                    RawResponse = rawResponse,
+                    ParsedImpactedCount = parsedForChunk.Count(p => !p.ScenarioName.StartsWith("["))
+                });
+            }
+
+            // Dedupe by (feature file + scenario name) so same-named scenarios in different
+            // features aren't collapsed; keep highest confidence; rank.
+            result.ImpactedScenarios = impacted
+                .GroupBy(s => (s.FeatureFile, s.ScenarioName))
+                .Select(g => g.OrderByDescending(s => s.Confidence).First())
+                .OrderByDescending(s => s.Confidence)
+                .ThenBy(s => s.FeatureFile)
+                .ToList();
+
+            result.Success = true;
+            _logger.LogInformation("Analysis complete. {Count} impacted scenarios.", result.ImpactedScenarios.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Analysis pipeline failed");
+            result.Success = false;
+            result.ErrorMessage = ex.Message;
         }
 
-        _logger.LogInformation("Prepared {Count} prompt chunk(s) for manual Copilot Chat paste.", chunks.Count);
-        return prepared;
-    }
-
-    /// <summary>
-    /// Step B — call once per chunk after pasting that chunk's prompt into Copilot Chat
-    /// and copying back the response. Once all chunks are submitted, call FinalizeResult.
-    /// </summary>
-    public List<ImpactedScenario> ParseChunkResponse(string rawCopilotResponse)
-    {
-        return _responseParser.Parse(rawCopilotResponse);
-    }
-
-    /// <summary>
-    /// Combines parsed results from all chunks into the final ranked, deduplicated list.
-    /// Call after every chunk has been submitted via ParseChunkResponse.
-    /// </summary>
-    public AnalysisResult FinalizeResult(PreparedAnalysis prepared, List<List<ImpactedScenario>> chunkResults)
-    {
-        var impacted = chunkResults.SelectMany(r => r).ToList();
-
-        var deduped = impacted
-            .GroupBy(s => (s.FeatureFile, s.ScenarioName))
-            .Select(g => g.OrderByDescending(s => s.Confidence).First())
-            .OrderByDescending(s => s.Confidence)
-            .ThenBy(s => s.FeatureFile)
-            .ToList();
-
-        _logger.LogInformation("Finalized. {Count} impacted scenarios identified.", deduped.Count);
-
-        return new AnalysisResult
-        {
-            Success = true,
-            PrMetadata = prepared.PrMetadata,
-            ChangedSymbols = prepared.ChangedSymbols,
-            AllScenarios = prepared.AllScenarios,
-            ImpactedScenarios = deduped
-        };
+        return result;
     }
 
     private static List<List<ScenarioRecord>> ChunkScenarios(List<ScenarioRecord> scenarios, int chunkSize)
@@ -178,24 +178,4 @@ public class AnalysisPipeline
             chunks.Add(scenarios.Skip(i).Take(chunkSize).ToList());
         return chunks;
     }
-}
-
-/// <summary>Result of Step A — everything needed to drive the manual paste UI.</summary>
-public class PreparedAnalysis
-{
-    public PrMetadata? PrMetadata { get; set; }
-    public List<ChangedSymbol> ChangedSymbols { get; set; } = new();
-    public List<ScenarioRecord> AllScenarios { get; set; } = new();
-    public List<PromptChunk> PromptChunks { get; set; } = new();
-    public string? Warning { get; set; }
-}
-
-/// <summary>One prompt ready to paste into Copilot Chat, plus a slot for the pasted-back response.</summary>
-public class PromptChunk
-{
-    public int ChunkIndex { get; set; }
-    public int TotalChunks { get; set; }
-    public string PromptText { get; set; } = string.Empty;
-    public int ScenarioCount { get; set; }
-    public string? PastedResponse { get; set; }
 }

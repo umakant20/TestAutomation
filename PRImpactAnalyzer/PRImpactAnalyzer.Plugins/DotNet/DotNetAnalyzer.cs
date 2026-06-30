@@ -3,6 +3,10 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using PRImpactAnalyzer.Core.Interfaces;
 using PRImpactAnalyzer.Core.Models;
+// Microsoft.CodeAnalysis defines its own SymbolKind (for compiler symbols like classes/
+// methods/namespaces), which collides with our domain model's SymbolKind (HttpRoute,
+// DotNetMethod, etc). Alias ours explicitly so every reference below is unambiguous.
+using SymbolKind = PRImpactAnalyzer.Core.Models.SymbolKind;
 
 namespace PRImpactAnalyzer.Plugins.DotNet;
 

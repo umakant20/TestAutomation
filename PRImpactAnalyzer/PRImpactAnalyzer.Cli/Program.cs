@@ -40,7 +40,7 @@ var failOnImpact = argMap.ContainsKey("fail-on-impact");
 var model = argMap.GetValueOrDefault("model") ?? "claude-haiku-4.5";
 
 await using var analyzer = PrImpactAnalyzerFacade.Create(
-    services => services.AddPrImpactAnalyzer(model),
+    services => PRImpactAnalyzer.Infrastructure.PrImpactAnalyzerRegistration.AddPrImpactAnalyzer(services, model),
     logging => logging
         .AddConsole()
         .SetMinimumLevel(quiet ? LogLevel.Warning : LogLevel.Information));

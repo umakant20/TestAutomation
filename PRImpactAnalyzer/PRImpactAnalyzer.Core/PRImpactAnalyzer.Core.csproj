@@ -7,7 +7,7 @@
     <PackageId>PRImpactAnalyzer.Core</PackageId>
     <Version>1.0.0</Version>
     <Authors>QA Automation</Authors>
-    <Description>PR test-impact analysis engine: maps Azure DevOps PR changes to impacted SpecFlow/Reqnroll scenarios using the GitHub Copilot SDK.</Description>
+    <Description>PR test-impact analysis engine: maps Azure DevOps PR changes to impacted SpecFlow/Reqnroll scenarios. The LLM reasoning step is manual (paste into Copilot Chat, paste the JSON reply back) since no programmatic Copilot access exists for individual subscriptions.</Description>
   </PropertyGroup>
 
   <ItemGroup>

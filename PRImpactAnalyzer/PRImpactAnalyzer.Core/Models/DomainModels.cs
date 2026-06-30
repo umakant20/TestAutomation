@@ -139,17 +139,18 @@ public class AnalysisResult
     public string? ErrorMessage { get; set; }
     public PrMetadata? PrMetadata { get; set; }
     public List<ChangedSymbol> ChangedSymbols { get; set; } = new();
-    public List<ScenarioRecord> AllScenarios { get; set; } = new();
-    public List<ImpactedScenario> ImpactedScenarios { get; set; } = new();
 
-    /// <summary>Last chunk's prompt/response — kept for backward compatibility and quick debugging.</summary>
-    public string? RawLlmPrompt { get; set; }
-    public string? RawLlmResponse { get; set; }
+    /// <summary>Total scenarios scanned in the test repo (count only — the full list isn't
+    /// needed downstream and would otherwise round-trip a potentially large list through
+    /// the on-disk state file between the prepare and report steps for no benefit).</summary>
+    public int AllScenarioCount { get; set; }
+
+    public List<ImpactedScenario> ImpactedScenarios { get; set; } = new();
 
     /// <summary>The raw unified diff text fetched from the PR (shown in the HTML report).</summary>
     public string RawDiffText { get; set; } = string.Empty;
 
-    /// <summary>Every prompt sent to the LLM and the raw response it returned, one entry per chunk.</summary>
+    /// <summary>Every prompt sent to Copilot and the raw response pasted back, one entry per chunk.</summary>
     public List<LlmExchange> LlmExchanges { get; set; } = new();
 
     public DateTime AnalyzedAt { get; set; } = DateTime.UtcNow;

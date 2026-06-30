@@ -116,7 +116,7 @@ public static class HtmlReportWriter
         AppendMetaCard(sb, "HIGH", r.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.High).ToString(), "high");
         AppendMetaCard(sb, "MEDIUM", r.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.Medium).ToString(), "medium");
         AppendMetaCard(sb, "VERIFY", r.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.Verify).ToString(), "verify");
-        AppendMetaCard(sb, "Scenarios Scanned", r.AllScenarios.Count.ToString());
+        AppendMetaCard(sb, "Scenarios Scanned", r.AllScenarioCount.ToString());
         AppendMetaCard(sb, "Changed Symbols", r.ChangedSymbols.Count.ToString());
         sb.Append("  </div>\n");
 

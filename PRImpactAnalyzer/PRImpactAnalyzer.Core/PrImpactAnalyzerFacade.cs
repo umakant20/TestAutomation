@@ -1,36 +1,29 @@
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using PRImpactAnalyzer.Core.Interfaces;
 using PRImpactAnalyzer.Core.Models;
 using PRImpactAnalyzer.Core.Pipeline;
 
 namespace PRImpactAnalyzer.Core;
 
 /// <summary>
-/// One-call entry point for consuming the analyzer as a library from a test framework,
-/// build script, or CI step. Wraps the DI-resolved AnalysisPipeline so callers don't have
-/// to wire up the container themselves for the common case.
+/// One-call entry point for the manual-paste workflow:
 ///
-/// Typical usage from a test framework:
-///
-///   var analyzer = PrImpactAnalyzerFacade.CreateDefault();
-///   var result = await analyzer.AnalyzeAsync(new AnalysisRequest {
-///       DevRepoPrUrl      = "https://dev.azure.com/org/proj/_git/repo/pullrequest/482",
-///       AzureDevOpsPat    = Environment.GetEnvironmentVariable("ADO_PAT")!,
-///       TestRepoLocalPath = @"C:\source\MyApp.Tests",
-///   });
-///   foreach (var s in result.ImpactedScenarios)
-///       Console.WriteLine($"{s.Confidence} | {s.FeatureFile} | {s.ScenarioName} | {s.Reason}");
-///
-/// CreateDefault() requires the consuming project to also reference the Infrastructure and
-/// Plugins assemblies (so the analyzers, ADO provider, and Copilot SDK orchestrator can be
-/// registered). The RegisterServices hook below is called via reflection-free delegate so
-/// Core itself stays dependency-free — see PrImpactAnalyzerRegistration in Infrastructure.
+///   1. await facade.PrepareAndWritePromptAsync(request, "prompt.txt", "state.json")
+///      → writes ONE combined prompt file (all chunks, clearly separated if more than one)
+///        and a state file capturing everything needed to finalize later.
+///   2. You paste prompt.txt into Copilot Chat, and paste the JSON reply back into a file
+///      (one file per chunk if there's more than one — usually there's just one).
+///   3. await facade.FinalizeFromFilesAsync("state.json", new[] { "response.txt" }, "report.html")
+///      → parses the response(s), builds the report, writes report.html.
 /// </summary>
 public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
 {
     private readonly ServiceProvider _provider;
     private readonly AnalysisPipeline _pipeline;
+
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private PrImpactAnalyzerFacade(ServiceProvider provider)
     {
@@ -38,21 +31,12 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
         _pipeline = provider.GetRequiredService<AnalysisPipeline>();
     }
 
-    /// <summary>
-    /// Builds a facade with all default services registered via the supplied registration
-    /// delegate (which lives in Infrastructure so Core has no dependency on it).
-    /// </summary>
     public static PrImpactAnalyzerFacade Create(Action<IServiceCollection> registerServices, Action<ILoggingBuilder>? configureLogging = null)
     {
         var services = new ServiceCollection();
         services.AddLogging(lb =>
         {
             configureLogging?.Invoke(lb);
-            // Fully-qualified call (rather than relying on extension-method resolution via
-            // `using`) so this compiles even if a stale obj/bin cache or partial restore
-            // hasn't picked up the Microsoft.Extensions.Logging.Console package reference yet.
-            // If this line itself fails to resolve, it confirms the package truly isn't
-            // restored — run "Restore NuGet Packages" (or `dotnet restore`) on the solution.
             if (configureLogging is null) Microsoft.Extensions.Logging.ConsoleLoggerExtensions.AddConsole(lb);
         });
         registerServices(services);
@@ -60,24 +44,89 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
         return new PrImpactAnalyzerFacade(provider);
     }
 
-    public Task<AnalysisResult> AnalyzeAsync(AnalysisRequest request, CancellationToken cancellationToken = default)
-        => _pipeline.RunAsync(request, cancellationToken);
+    /// <summary>Step A — runs the free/local phases and returns the prepared analysis (no file I/O).</summary>
+    public Task<PreparedAnalysis> PrepareAsync(AnalysisRequest request, CancellationToken cancellationToken = default)
+        => _pipeline.PrepareAsync(request, cancellationToken);
 
     /// <summary>
-    /// Runs the analysis AND writes a self-contained HTML report of the run, returning both
-    /// the result and the path to the report file. This is the convenient entry point when
-    /// you want the visual report every time (the common case from a framework or CI step).
+    /// Step A, convenience version — runs PrepareAsync AND writes the combined prompt .txt
+    /// file plus a JSON state file you'll pass to FinalizeFromFilesAsync later.
+    /// Returns the prepared analysis in case you want to inspect it (e.g. check .Warning).
     /// </summary>
-    public async Task<(AnalysisResult Result, string ReportPath)> AnalyzeAndReportAsync(
-        AnalysisRequest request, string? reportPath = null, CancellationToken cancellationToken = default)
+    public async Task<PreparedAnalysis> PrepareAndWriteFilesAsync(
+        AnalysisRequest request, string promptFilePath, string stateFilePath, CancellationToken cancellationToken = default)
     {
-        var result = await _pipeline.RunAsync(request, cancellationToken);
-        var path = HtmlReportWriter.Write(result, reportPath);
-        return (result, path);
+        var prepared = await _pipeline.PrepareAsync(request, cancellationToken);
+
+        if (!string.IsNullOrEmpty(prepared.Warning))
+            return prepared; // nothing to write — no chunks were generated
+
+        File.WriteAllText(promptFilePath, RenderCombinedPromptFile(prepared), Encoding.UTF8);
+        File.WriteAllText(stateFilePath, JsonSerializer.Serialize(prepared, JsonOptions), Encoding.UTF8);
+
+        return prepared;
     }
 
-    public async ValueTask DisposeAsync()
+    /// <summary>
+    /// Step B — reads the state file written by PrepareAndWriteFilesAsync, parses the response
+    /// file(s) you pasted Copilot's reply into (one per chunk, in order), builds the final
+    /// AnalysisResult, and writes the HTML report. Returns the result too in case you need it.
+    /// </summary>
+    public async Task<AnalysisResult> FinalizeFromFilesAsync(
+        string stateFilePath, IReadOnlyList<string> responseFilePaths, string reportFilePath)
     {
-        await _provider.DisposeAsync();
+        var stateJson = await File.ReadAllTextAsync(stateFilePath);
+        var prepared = JsonSerializer.Deserialize<PreparedAnalysis>(stateJson, JsonOptions)
+            ?? throw new InvalidOperationException($"Could not deserialize state file at '{stateFilePath}'.");
+
+        var responses = new List<string>();
+        foreach (var path in responseFilePaths)
+            responses.Add(await File.ReadAllTextAsync(path));
+
+        var result = _pipeline.Finalize(prepared, responses);
+        HtmlReportWriter.Write(result, reportFilePath);
+        return result;
     }
+
+    /// <summary>
+    /// Renders every prompt chunk into ONE combined .txt file. If there's more than one chunk,
+    /// each is clearly separated with instructions to paste it into its OWN fresh Copilot Chat
+    /// thread (continuing the same thread re-sends prior chunks as context, which costs tokens
+    /// for no benefit) and save that chunk's reply to its own response file.
+    /// </summary>
+    private static string RenderCombinedPromptFile(PreparedAnalysis prepared)
+    {
+        var sb = new StringBuilder();
+        var chunks = prepared.PromptChunks;
+
+        if (chunks.Count == 1)
+        {
+            sb.AppendLine("# Paste everything below this line into a single Copilot Chat message.");
+            sb.AppendLine("# Save Copilot's JSON reply to a file and pass it to the `report` step.");
+            sb.AppendLine();
+            sb.Append(chunks[0].PromptText);
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"# This PR produced {chunks.Count} prompt chunks. Paste each one into its own FRESH");
+        sb.AppendLine("# Copilot Chat thread (not a continuation of the previous chunk's thread — a fresh");
+        sb.AppendLine("# thread avoids re-billing earlier chunks' tokens as context). Save each chunk's JSON");
+        sb.AppendLine("# reply to its own file, then pass all the response files to the `report` step in order.");
+        sb.AppendLine();
+
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            sb.AppendLine("================================================================================");
+            sb.AppendLine($"CHUNK {i + 1} OF {chunks.Count} — paste only the text below this header, up to the next");
+            sb.AppendLine("'CHUNK' header, into a fresh Copilot Chat thread.");
+            sb.AppendLine("================================================================================");
+            sb.AppendLine();
+            sb.AppendLine(chunks[i].PromptText);
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    public async ValueTask DisposeAsync() => await _provider.DisposeAsync();
 }

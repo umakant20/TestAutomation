@@ -3,12 +3,6 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- GitHub.Copilot.SDK marks several preview types (incl. PermissionDecision) with the
-         [Experimental] attribute. We deliberately use them — this is the intended, documented
-         API for handling tool-permission requests — so the warning is suppressed rather than
-         worked around. Replace GHCOPILOT001 with the exact diagnostic ID shown in your build
-         output / Error List "Code" column if it differs (SDK versions can change the ID). -->
-    <NoWarn>$(NoWarn);GHCOPILOT001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,10 +13,12 @@
     <!-- Azure DevOps REST API client -->
     <PackageReference Include="Microsoft.TeamFoundationServer.Client" Version="19.225.1" />
     <PackageReference Include="Microsoft.VisualStudio.Services.Client" Version="19.225.1" />
-    <!-- GitHub Copilot SDK: programmatic access to the Copilot agent runtime via the
-         bundled Copilot CLI. Replaces the old manual paste bridge entirely. -->
-    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.44" />
     <!-- DI abstractions for the registration extension -->
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
+    <!-- NO Copilot SDK / API package here, deliberately. There is no programmatic Copilot
+         access available for an individual subscription without an explicit GitHub token
+         grant, which isn't obtainable for this use case. The LLM step is manual: you paste
+         the generated prompt into Copilot Chat yourself and paste the JSON reply back in —
+         see PrImpactAnalyzer.Cli's `prepare` and `report` commands. -->
   </ItemGroup>
 </Project>

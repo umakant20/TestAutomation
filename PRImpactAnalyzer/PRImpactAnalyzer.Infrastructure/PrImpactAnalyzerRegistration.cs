@@ -1,9 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using PRImpactAnalyzer.Core.Interfaces;
 using PRImpactAnalyzer.Core.Pipeline;
 using PRImpactAnalyzer.Infrastructure.Git;
-using PRImpactAnalyzer.Infrastructure.Http;
 using PRImpactAnalyzer.Plugins.ColdFusion;
 using PRImpactAnalyzer.Plugins.Config;
 using PRImpactAnalyzer.Plugins.DotNet;
@@ -15,27 +13,21 @@ using PRImpactAnalyzer.Plugins.SpecFlow;
 namespace PRImpactAnalyzer.Infrastructure;
 
 /// <summary>
-/// One-stop DI registration for library/CI/CLI consumers. Registers every analyzer, the
-/// test parser, the Azure DevOps diff provider, the Copilot SDK orchestrator, and the pipeline.
+/// One-stop DI registration for library/CLI consumers. Registers every analyzer, the test
+/// parser, the Azure DevOps diff provider, and the pipeline.
 ///
-/// Usage with the facade:
-///   var analyzer = PrImpactAnalyzerFacade.Create(services =>
-///       services.AddPrImpactAnalyzer(model: "claude-haiku-4.5"));
+/// NOTE: there is deliberately no LLM orchestrator registered here. The LLM step is manual —
+/// you paste the generated prompt into Copilot Chat yourself and paste the JSON reply back in.
+/// See AnalysisPipeline.PrepareAsync / Finalize, and the CLI's `prepare` / `report` commands.
 /// </summary>
 public static class PrImpactAnalyzerRegistration
 {
-    public static IServiceCollection AddPrImpactAnalyzer(this IServiceCollection services, string model = "claude-haiku-4.5")
+    public static IServiceCollection AddPrImpactAnalyzer(this IServiceCollection services)
     {
-        // Source control + LLM
         services.AddSingleton<IPrDiffProvider, AzureDevOpsPrDiffProvider>();
 
-        // CopilotClient is expensive (spawns the CLI) — register the orchestrator as a singleton
-        // so exactly one client/process exists for the whole run.
-        services.AddSingleton<ILlmOrchestrator>(sp =>
-            new CopilotSdkOrchestrator(sp.GetRequiredService<ILogger<CopilotSdkOrchestrator>>(), model));
-
-        // Code analyzers — SoapWsdl before DotNet so a "Service" .cs file reaches the SOAP
-        // analyzer too; all matching analyzers run per file regardless of order now.
+        // Code analyzers — all matching analyzers run per file (not just the first match),
+        // so e.g. a .cs SOAP service file reaches both the SOAP analyzer and Roslyn DotNet analyzer.
         services.AddSingleton<ICodeAnalyzer, SoapWsdlAnalyzer>();
         services.AddSingleton<ICodeAnalyzer, DotNetAnalyzer>();
         services.AddSingleton<ICodeAnalyzer, ColdFusionAnalyzer>();
@@ -43,10 +35,8 @@ public static class PrImpactAnalyzerRegistration
         services.AddSingleton<ICodeAnalyzer, MarkupSelectorAnalyzer>();
         services.AddSingleton<ICodeAnalyzer, XmlConfigAnalyzer>();
 
-        // Test parser
         services.AddSingleton<ITestParser, SpecFlowParser>();
 
-        // Pipeline components
         services.AddSingleton<PromptBuilder>();
         services.AddSingleton<LlmResponseParser>();
         services.AddSingleton<AnalysisPipeline>();

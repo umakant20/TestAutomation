@@ -1,157 +1,198 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using PRImpactAnalyzer.Core;
 using PRImpactAnalyzer.Core.Models;
 using PRImpactAnalyzer.Infrastructure;
 
-// PR Test Impact Analyzer — headless CLI runner.
+// PR Test Impact Analyzer — manual-paste CLI runner, driven entirely by a JSON config file
+// (no command-line flags to type/remember). Two commands, sharing one config file:
 //
-// Usage:
-//   pr-impact --pr <ado-pr-url> --test-repo <path> [--pat <token>] [--model <name>]
-//             [--json] [--fail-on-impact] [--quiet]
+//   pr-impact prepare [path-to-config.json]   (defaults to "pr-impact-config.json" in the
+//                                               current directory if omitted)
+//   pr-impact report  [path-to-config.json]
 //
-// Auth:
-//   --pat or env ADO_PAT          Azure DevOps Personal Access Token (Code: Read)
-//   Copilot auth is handled by the Copilot CLI's own login (copilot login / gh auth login).
+// `prepare` reads PR/repo/PAT fields from the config and writes a prompt file + state file.
+// `report` reads the responseFiles list from the same config and writes the HTML report.
 //
-// Exit codes (useful in CI):
-//   0  success (analysis ran)
-//   2  success but impacted scenarios found AND --fail-on-impact was set
-//   1  error
+// There is no programmatic Copilot access for an individual subscription without an explicit
+// GitHub token grant that isn't obtainable for this use case — the LLM step stays manual:
+// you paste the prompt file into Copilot Chat yourself, save the reply to a file, and list
+// that file's path in the config's "responseFiles" array before running `report`.
 
-var argMap = ParseArgs(args);
-
-if (argMap.ContainsKey("help") || !argMap.ContainsKey("pr") || !argMap.ContainsKey("test-repo"))
+if (args.Length == 0 || args[0] is "--help" or "-h")
 {
     PrintUsage();
-    return argMap.ContainsKey("help") ? 0 : 1;
+    return args.Length == 0 ? 1 : 0;
 }
 
-var pat = argMap.GetValueOrDefault("pat") ?? Environment.GetEnvironmentVariable("ADO_PAT");
-if (string.IsNullOrWhiteSpace(pat))
+var command = args[0];
+var configPath = args.Length > 1 ? args[1] : "pr-impact-config.json";
+
+if (!File.Exists(configPath))
 {
-    Console.Error.WriteLine("ERROR: No Azure DevOps PAT supplied. Pass --pat or set ADO_PAT.");
+    Console.Error.WriteLine($"ERROR: config file not found at '{Path.GetFullPath(configPath)}'.");
+    Console.Error.WriteLine("Create one (see PrImpactConfig fields below) or pass its path as the second argument.");
+    PrintUsage();
     return 1;
 }
 
-var jsonOutput = argMap.ContainsKey("json");
-var quiet = argMap.ContainsKey("quiet") || jsonOutput;
-var failOnImpact = argMap.ContainsKey("fail-on-impact");
-var model = argMap.GetValueOrDefault("model") ?? "claude-haiku-4.5";
+var config = JsonSerializer.Deserialize<PrImpactConfig>(
+    await File.ReadAllTextAsync(configPath),
+    new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+    ?? throw new InvalidOperationException($"Could not parse config file at '{configPath}'.");
 
-await using var analyzer = PrImpactAnalyzerFacade.Create(
-    services => PRImpactAnalyzer.Infrastructure.PrImpactAnalyzerRegistration.AddPrImpactAnalyzer(services, model),
-    logging => logging
-        .AddConsole()
-        .SetMinimumLevel(quiet ? LogLevel.Warning : LogLevel.Information));
-
-var request = new AnalysisRequest
+return command switch
 {
-    DevRepoPrUrl      = argMap["pr"],
-    TestRepoLocalPath = argMap["test-repo"],
-    DevRepoLocalPath  = argMap.GetValueOrDefault("dev-repo") ?? string.Empty,
-    AzureDevOpsPat    = pat,
+    "prepare" => await RunPrepareAsync(config),
+    "report"  => await RunReportAsync(config),
+    _ => Unknown(command)
 };
 
-var result = await analyzer.AnalyzeAsync(request);
-
-// Write an HTML report every run — this is the primary way to review everything together.
-var reportPath = argMap.GetValueOrDefault("report");
-string writtenReportPath;
-try
+static int Unknown(string command)
 {
-    writtenReportPath = PRImpactAnalyzer.Core.Pipeline.HtmlReportWriter.Write(result, reportPath);
-}
-catch (Exception ex)
-{
-    Console.Error.WriteLine($"WARNING: could not write HTML report: {ex.Message}");
-    writtenReportPath = "(not written)";
-}
-
-if (!result.Success)
-{
-    Console.Error.WriteLine($"ERROR: {result.ErrorMessage}");
+    Console.Error.WriteLine($"Unknown command '{command}'. Expected 'prepare' or 'report'.");
+    PrintUsage();
     return 1;
 }
 
-if (jsonOutput)
+static async Task<int> RunPrepareAsync(PrImpactConfig config)
 {
-    Console.WriteLine(JsonSerializer.Serialize(result.ImpactedScenarios, new JsonSerializerOptions { WriteIndented = true }));
-    Console.Error.WriteLine($"HTML report written to: {writtenReportPath}");
-}
-else
-{
+    if (string.IsNullOrWhiteSpace(config.Pr) || string.IsNullOrWhiteSpace(config.TestRepoPath))
+    {
+        Console.Error.WriteLine("ERROR: config must include 'pr' and 'testRepoPath' for the 'prepare' command.");
+        return 1;
+    }
+
+    var pat = config.AzureDevOpsPat ?? Environment.GetEnvironmentVariable("ADO_PAT");
+    if (string.IsNullOrWhiteSpace(pat))
+    {
+        Console.Error.WriteLine("ERROR: No Azure DevOps PAT supplied. Set 'azureDevOpsPat' in the config, or the ADO_PAT environment variable.");
+        return 1;
+    }
+
+    var promptOut = config.PromptOutput ?? "prompt.txt";
+    var stateOut  = config.StateOutput ?? "state.json";
+
+    await using var analyzer = PrImpactAnalyzerFacade.Create(
+        services => services.AddPrImpactAnalyzer(),
+        logging => logging.AddConsole().SetMinimumLevel(LogLevel.Information));
+
+    var request = new AnalysisRequest
+    {
+        DevRepoPrUrl      = config.Pr,
+        TestRepoLocalPath = config.TestRepoPath,
+        DevRepoLocalPath  = config.DevRepoPath ?? string.Empty,
+        AzureDevOpsPat    = pat,
+    };
+
+    var prepared = await analyzer.PrepareAndWriteFilesAsync(request, promptOut, stateOut);
+
+    if (!string.IsNullOrEmpty(prepared.Warning))
+    {
+        Console.Error.WriteLine($"WARNING: {prepared.Warning}");
+        Console.Error.WriteLine("No prompt file was written — nothing to send to Copilot for this PR.");
+        return 1;
+    }
+
     Console.WriteLine();
-    Console.WriteLine($"=== PR Test Impact Analysis ===");
+    Console.WriteLine($"Prompt written to:  {Path.GetFullPath(promptOut)}");
+    Console.WriteLine($"State written to:   {Path.GetFullPath(stateOut)}");
+    Console.WriteLine($"Chunks:             {prepared.PromptChunks.Count}");
+    Console.WriteLine();
+    Console.WriteLine("Next steps:");
+    Console.WriteLine($"  1. Open {promptOut} and paste its contents into Copilot Chat" +
+        (prepared.PromptChunks.Count > 1 ? " — ONE CHUNK AT A TIME, each in a fresh thread." : "."));
+    Console.WriteLine("  2. Save Copilot's JSON reply to a file (one file per chunk, if more than one).");
+    Console.WriteLine($"  3. Add the response file path(s) to 'responseFiles' in {configPath}, then run: pr-impact report {configPath}");
+
+    return 0;
+}
+
+static async Task<int> RunReportAsync(PrImpactConfig config)
+{
+    if (string.IsNullOrWhiteSpace(config.StateOutput))
+    {
+        Console.Error.WriteLine("ERROR: config's 'stateOutput' must point at the state.json written by 'prepare'.");
+        return 1;
+    }
+    if (config.ResponseFiles is null || config.ResponseFiles.Count == 0)
+    {
+        Console.Error.WriteLine("ERROR: config's 'responseFiles' must list at least one file containing Copilot's pasted JSON reply.");
+        return 1;
+    }
+
+    var reportOut = config.ReportOutput ?? $"pr-impact-report-{DateTime.Now:yyyyMMdd-HHmmss}.html";
+
+    await using var analyzer = PrImpactAnalyzerFacade.Create(
+        services => services.AddPrImpactAnalyzer(),
+        logging => logging.AddConsole().SetMinimumLevel(LogLevel.Warning));
+
+    var result = await analyzer.FinalizeFromFilesAsync(config.StateOutput, config.ResponseFiles, reportOut);
+
+    if (!result.Success)
+    {
+        Console.Error.WriteLine($"ERROR: {result.ErrorMessage}");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"=== PR Test Impact Report ===");
     Console.WriteLine($"PR: {result.PrMetadata?.Title}");
-    Console.WriteLine($"Changed symbols: {result.ChangedSymbols.Count} | Scenarios scanned: {result.AllScenarios.Count}");
+    Console.WriteLine($"Changed symbols: {result.ChangedSymbols.Count} | Scenarios scanned: {result.AllScenarioCount}");
     Console.WriteLine($"Impacted scenarios: {result.ImpactedScenarios.Count}");
     Console.WriteLine();
+    Console.WriteLine($"HTML report written to: {Path.GetFullPath(reportOut)}");
 
-    if (result.ImpactedScenarios.Count == 0)
-    {
-        Console.WriteLine("No impacted scenarios found.");
-    }
-    else
-    {
-        foreach (var s in result.ImpactedScenarios)
-        {
-            Console.WriteLine($"[{s.Confidence,-6}] {s.FeatureFile} :: {s.ScenarioName}");
-            Console.WriteLine($"          matched: {s.MatchedChange}");
-            if (!string.IsNullOrWhiteSpace(s.Reason))
-                Console.WriteLine($"          why:     {s.Reason}");
-        }
-    }
-    Console.WriteLine();
-    Console.WriteLine($"HTML report written to: {writtenReportPath}");
-}
-
-if (failOnImpact && result.ImpactedScenarios.Count > 0)
-    return 2;
-
-return 0;
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-static Dictionary<string, string> ParseArgs(string[] args)
-{
-    var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-    for (int i = 0; i < args.Length; i++)
-    {
-        if (!args[i].StartsWith("--")) continue;
-        var key = args[i][2..];
-        // Flags with no value
-        if (i + 1 >= args.Length || args[i + 1].StartsWith("--"))
-        {
-            map[key] = "true";
-        }
-        else
-        {
-            map[key] = args[++i];
-        }
-    }
-    return map;
+    return result.ImpactedScenarios.Count > 0 && config.FailOnImpact ? 2 : 0;
 }
 
 static void PrintUsage()
 {
-    Console.WriteLine(@"PR Test Impact Analyzer
+    Console.WriteLine(@"PR Test Impact Analyzer — manual-paste workflow, driven by a JSON config file.
 
 Usage:
-  pr-impact --pr <ado-pr-url> --test-repo <path> [options]
+  pr-impact prepare [config.json]   (defaults to pr-impact-config.json in the current directory)
+  pr-impact report  [config.json]
 
-Required:
-  --pr <url>          Azure DevOps PR URL (https://dev.azure.com/org/proj/_git/repo/pullrequest/123)
-  --test-repo <path>  Local path to the C# SpecFlow/Reqnroll test repo
+Example config.json:
+{
+  ""pr"": ""https://dev.azure.com/yourorg/yourproject/_git/yourrepo/pullrequest/482"",
+  ""testRepoPath"": ""C:\\source\\MyApp.Tests"",
+  ""devRepoPath"": """",
+  ""azureDevOpsPat"": null,
+  ""promptOutput"": ""prompt.txt"",
+  ""stateOutput"": ""state.json"",
+  ""responseFiles"": [""response.txt""],
+  ""reportOutput"": ""report.html"",
+  ""failOnImpact"": false
+}
 
-Options:
-  --pat <token>       Azure DevOps PAT (Code: Read). Defaults to env ADO_PAT.
-  --dev-repo <path>   Local path to the dev repo (optional extra context)
-  --model <name>      Copilot model (default: claude-haiku-4.5)
-  --report <path>     HTML report output path (default: ./pr-impact-report-<timestamp>.html)
-  --json              Output impacted scenarios as JSON (implies --quiet)
-  --fail-on-impact    Exit code 2 if any scenario is impacted (useful as a CI gate)
-  --quiet             Suppress info logging
-  --help              Show this help
+Notes:
+  - azureDevOpsPat can be left null/omitted and supplied via the ADO_PAT environment variable instead.
+  - responseFiles is only needed for the 'report' command — add the path(s) after you've pasted
+    Copilot's reply into a file. List one path per prompt chunk, in order, if 'prepare' produced more than one.
 
-Copilot auth uses the Copilot CLI's own login (run 'copilot login' once).");
+Workflow:
+  1. pr-impact prepare config.json
+  2. Paste prompt.txt into Copilot Chat; save the reply to a file; add that path to responseFiles in config.json
+  3. pr-impact report config.json
+");
+}
+
+/// <summary>JSON config file shape — every field used by either 'prepare' or 'report'.</summary>
+public class PrImpactConfig
+{
+    // Used by 'prepare'
+    [JsonPropertyName("pr")] public string? Pr { get; set; }
+    [JsonPropertyName("testRepoPath")] public string? TestRepoPath { get; set; }
+    [JsonPropertyName("devRepoPath")] public string? DevRepoPath { get; set; }
+    [JsonPropertyName("azureDevOpsPat")] public string? AzureDevOpsPat { get; set; }
+    [JsonPropertyName("promptOutput")] public string? PromptOutput { get; set; }
+    [JsonPropertyName("stateOutput")] public string? StateOutput { get; set; }
+
+    // Used by 'report'
+    [JsonPropertyName("responseFiles")] public List<string>? ResponseFiles { get; set; }
+    [JsonPropertyName("reportOutput")] public string? ReportOutput { get; set; }
+    [JsonPropertyName("failOnImpact")] public bool FailOnImpact { get; set; }
 }

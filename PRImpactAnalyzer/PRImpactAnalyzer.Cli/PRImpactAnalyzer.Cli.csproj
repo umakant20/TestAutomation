@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>pr-impact</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PRImpactAnalyzer.Core\PRImpactAnalyzer.Core.csproj" />
+    <ProjectReference Include="..\PRImpactAnalyzer.Infrastructure\PRImpactAnalyzer.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

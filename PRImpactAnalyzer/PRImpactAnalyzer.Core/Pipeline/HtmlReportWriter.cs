@@ -20,156 +20,346 @@ public static class HtmlReportWriter
         var sb = new StringBuilder();
         var pr = r.PrMetadata;
 
+        // Sort impacted: HIGH first, then MEDIUM, then VERIFY
+        var sorted = r.ImpactedScenarios
+            .OrderBy(s => s.Confidence switch { ConfidenceLevel.High => 0, ConfidenceLevel.Medium => 1, _ => 2 })
+            .ThenBy(s => s.FeatureFile)
+            .ToList();
+
+        int countHigh   = sorted.Count(s => s.Confidence == ConfidenceLevel.High);
+        int countMedium = sorted.Count(s => s.Confidence == ConfidenceLevel.Medium);
+        int countVerify = sorted.Count(s => s.Confidence == ConfidenceLevel.Verify);
+
         sb.Append($@"<!DOCTYPE html>
-<html lang=""en""><head><meta charset=""utf-8""><meta name=""viewport"" content=""width=device-width,initial-scale=1"">
+<html lang=""en"">
+<head>
+<meta charset=""utf-8"">
+<meta name=""viewport"" content=""width=device-width,initial-scale=1"">
 <title>PR Test Impact Report</title>
 <style>
-:root{{--bg:#0f1117;--card:#1a1d27;--card2:#212530;--border:#2c3140;--text:#e6e9ef;--muted:#9aa3b4;
-  --high:#3fb950;--medium:#d29922;--verify:#8b949e;--add:#3fb950;--del:#f85149;--mono:'Consolas',monospace;}}
-*{{box-sizing:border-box;}}
-body{{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5;}}
-.wrap{{max-width:1100px;margin:0 auto;padding:32px 24px 80px;}}
-h1{{font-size:26px;margin:0 0 4px;}}
-h2{{font-size:18px;margin:32px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border);}}
-.sub{{color:var(--muted);font-size:13px;margin-bottom:24px;}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:8px;}}
-.mc{{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px 16px;}}
-.mc .lbl{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;}}
-.mc .val{{font-size:22px;font-weight:600;margin-top:4px;}}
-.val.high{{color:var(--high);}} .val.medium{{color:var(--medium);}} .val.verify{{color:var(--verify);}}
-.badge{{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11px;font-weight:600;}}
-.badge.high{{background:rgba(63,185,80,.16);color:var(--high);}}
-.badge.medium{{background:rgba(210,153,34,.16);color:var(--medium);}}
-.badge.verify{{background:rgba(139,148,158,.16);color:var(--verify);}}
-.sc-list{{display:flex;flex-direction:column;gap:10px;}}
-.sc{{background:var(--card);border-radius:8px;padding:14px 16px;border-left:3px solid var(--border);}}
-.sc.row-high{{border-left-color:var(--high);}} .sc.row-medium{{border-left-color:var(--medium);}} .sc.row-verify{{border-left-color:var(--verify);}}
-.sc-hdr{{display:flex;align-items:center;gap:10px;margin-bottom:8px;}}
-.sc-hdr strong{{flex:1;font-size:14px;}}
-.sc-meta{{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:8px;}}
-.sc-meta code{{font-family:var(--mono);font-size:11px;color:#79c0ff;background:#1a1d36;padding:1px 6px;border-radius:4px;}}
-.sc-reason{{font-size:13px;background:rgba(255,255,255,.03);border-radius:6px;padding:8px 10px;}}
-.sc-reason strong{{color:var(--muted);margin-right:6px;}}
-.reason-missing{{color:var(--verify);font-style:italic;}}
-table{{width:100%;border-collapse:collapse;background:var(--card);border-radius:8px;overflow:hidden;font-size:13px;}}
-th{{background:var(--card2);text-align:left;padding:10px 12px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}}
-td{{padding:10px 12px;border-top:1px solid var(--border);vertical-align:top;}}
-code{{font-family:var(--mono);font-size:12px;}}
-pre{{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;overflow:auto;max-height:480px;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12px;}}
-.diff .add{{color:var(--add);}} .diff .del{{color:var(--del);}} .diff .ctx{{color:var(--muted);}}
-details{{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;}}
-summary{{cursor:pointer;padding:12px 16px;font-weight:600;font-size:14px;}}
-details[open] summary{{border-bottom:1px solid var(--border);}}
-.db{{padding:16px;}}
-.cm{{color:var(--muted);font-size:12px;margin-bottom:10px;}}
-.empty{{color:var(--muted);padding:16px;text-align:center;}}
-.err{{background:rgba(248,81,73,.12);border:1px solid var(--del);color:#ffb4ae;border-radius:8px;padding:14px 16px;margin-bottom:16px;}}
-.legend{{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--muted);}}
-.legend ul{{margin:8px 0 0;padding-left:18px;}} .legend li{{margin-bottom:6px;line-height:1.5;}}
-</style></head><body><div class=""wrap"">
-<h1>PR Test Impact Report</h1>
-<div class=""sub"">Generated {E(r.AnalyzedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))}</div>
+/* ── Base ─────────────────────────────────────────────────────────────── */
+:root{{
+  --bg:#0d1117; --surface:#161b22; --surface2:#21262d; --border:#30363d;
+  --text:#e6edf3; --muted:#8b949e; --mono:'Consolas','Courier New',monospace;
+  --green:#2ea043; --green-bg:rgba(46,160,67,.12); --green-bd:rgba(46,160,67,.3);
+  --amber:#d29922; --amber-bg:rgba(210,153,34,.12); --amber-bd:rgba(210,153,34,.3);
+  --grey:#8b949e;  --grey-bg:rgba(139,148,158,.1);  --grey-bd:rgba(139,148,158,.25);
+  --blue:#58a6ff;  --blue-bg:rgba(88,166,255,.1);   --blue-bd:rgba(88,166,255,.25);
+  --del:#f85149;   --add:#3fb950;
+}}
+*{{box-sizing:border-box;margin:0;padding:0;}}
+body{{background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Helvetica,sans-serif;font-size:14px;line-height:1.5;}}
+a{{color:var(--blue);}}
+
+/* ── Layout ───────────────────────────────────────────────────────────── */
+.wrap{{max-width:1280px;margin:0 auto;padding:28px 24px 80px;}}
+.page-title{{font-size:22px;font-weight:700;margin-bottom:4px;}}
+.page-sub{{color:var(--muted);font-size:12px;margin-bottom:28px;}}
+
+/* ── Section headings ─────────────────────────────────────────────────── */
+.section-head{{
+  font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--muted);padding-bottom:8px;border-bottom:1px solid var(--border);
+  margin:28px 0 14px;
+}}
+
+/* ── PR metadata grid ─────────────────────────────────────────────────── */
+.meta-grid{{
+  display:flex;flex-wrap:wrap;gap:12px;
+}}
+.meta-grid .meta-card{{flex:1;min-width:120px;}}
+.meta-card{{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:14px 16px;min-width:0;
+}}
+.meta-card .lbl{{
+  font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--muted);margin-bottom:6px;
+}}
+.meta-card .val{{
+  font-size:14px;font-weight:600;line-height:1.4;
+  word-break:break-word;overflow-wrap:anywhere;
+}}
+.meta-card .val.branch{{font-size:12px;font-family:var(--mono);font-weight:400;}}
+.meta-desc{{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:12px 16px;margin-top:10px;color:var(--muted);font-size:13px;
+}}
+
+/* ── Summary stat cards ───────────────────────────────────────────────── */
+.summary-grid{{
+  display:flex;flex-wrap:wrap;gap:10px;margin-bottom:4px;
+}}
+.stat-card{{flex:1;min-width:120px;}}
+.stat-card .lbl{{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;}}
+.stat-card .val{{font-size:26px;font-weight:700;line-height:1;}}
+
+.stat-total{{border-color:var(--blue-bd);background:var(--blue-bg);}}
+.stat-total .lbl{{color:var(--blue);}} .stat-total .val{{color:var(--blue);}}
+
+.stat-high{{border-color:var(--green-bd);background:var(--green-bg);}}
+.stat-high .lbl{{color:var(--green);}} .stat-high .val{{color:var(--green);}}
+
+.stat-medium{{border-color:var(--amber-bd);background:var(--amber-bg);}}
+.stat-medium .lbl{{color:var(--amber);}} .stat-medium .val{{color:var(--amber);}}
+
+.stat-verify{{border-color:var(--grey-bd);background:var(--grey-bg);}}
+.stat-verify .lbl{{color:var(--grey);}} .stat-verify .val{{color:var(--grey);}}
+
+.stat-neutral{{border-color:var(--border);background:var(--surface2);}}
+.stat-neutral .lbl{{color:var(--muted);}} .stat-neutral .val{{color:var(--text);}}
+
+/* ── Filter bar ───────────────────────────────────────────────────────── */
+.filter-bar{{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;}}
+.filter-bar span{{font-size:12px;color:var(--muted);}}
+.filter-btn{{
+  border:1px solid var(--border);background:var(--surface2);color:var(--muted);
+  border-radius:6px;padding:4px 12px;font-size:12px;font-weight:500;cursor:pointer;transition:.15s;
+}}
+.filter-btn:hover,.filter-btn.active{{background:var(--surface);color:var(--text);border-color:var(--blue);}}
+.filter-btn.f-high.active{{border-color:var(--green);color:var(--green);background:var(--green-bg);}}
+.filter-btn.f-medium.active{{border-color:var(--amber);color:var(--amber);background:var(--amber-bg);}}
+.filter-btn.f-verify.active{{border-color:var(--grey);color:var(--grey);background:var(--grey-bg);}}
+
+/* ── Impacted scenarios table ─────────────────────────────────────────── */
+.tbl-wrap{{overflow-x:auto;border:1px solid var(--border);border-radius:8px;}}
+table{{width:100%;border-collapse:collapse;font-size:13px;}}
+thead th{{
+  background:var(--surface2);text-align:left;
+  padding:10px 12px;font-size:11px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  white-space:nowrap;border-bottom:1px solid var(--border);
+  position:sticky;top:0;
+}}
+tbody tr{{border-bottom:1px solid var(--border);transition:background .1s;}}
+tbody tr:last-child{{border-bottom:none;}}
+tbody tr:hover{{background:var(--surface2);}}
+tbody tr.row-high{{border-left:3px solid var(--green);}}
+tbody tr.row-medium{{border-left:3px solid var(--amber);}}
+tbody tr.row-verify{{border-left:3px solid var(--grey-bd);}}
+td{{padding:10px 12px;vertical-align:top;}}
+
+/* Column widths */
+.col-num{{width:40px;text-align:center;color:var(--muted);font-size:12px;}}
+.col-scenario{{width:26%;min-width:180px;}}
+.col-scenario strong{{display:block;font-weight:600;line-height:1.4;margin-bottom:2px;}}
+.col-scenario .sc-tags{{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;}}
+.col-file{{width:28%;min-width:160px;}}
+.col-file code{{
+  font-family:var(--mono);font-size:11px;color:#79c0ff;
+  background:#1c2333;padding:2px 6px;border-radius:4px;
+  word-break:break-all;display:inline-block;line-height:1.5;
+}}
+.col-match{{width:16%;min-width:120px;font-size:12px;color:var(--muted);word-break:break-word;}}
+.col-conf{{width:80px;text-align:center;white-space:nowrap;}}
+.col-why{{min-width:140px;font-size:12px;color:var(--muted);line-height:1.5;}}
+
+/* ── Confidence badges ────────────────────────────────────────────────── */
+.badge{{
+  display:inline-block;padding:3px 10px;border-radius:12px;
+  font-size:11px;font-weight:700;letter-spacing:.04em;
+}}
+.badge-high{{background:var(--green-bg);color:var(--green);border:1px solid var(--green-bd);}}
+.badge-medium{{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bd);}}
+.badge-verify{{background:var(--grey-bg);color:var(--grey);border:1px solid var(--grey-bd);}}
+
+/* ── Legend ───────────────────────────────────────────────────────────── */
+.legend{{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--muted);
+}}
+.legend ul{{list-style:none;display:flex;flex-direction:column;gap:4px;margin-top:6px;}}
+.legend li{{line-height:1.5;}}
+
+/* ── Changed symbols table ────────────────────────────────────────────── */
+.sym-tbl td:first-child code{{color:#79c0ff;font-size:11px;}}
+.sym-tbl td strong{{font-size:13px;}}
+.sym-tbl .old-sym{{color:var(--muted);font-size:11px;}}
+.change-badge{{
+  display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:600;
+  background:var(--surface2);color:var(--muted);border:1px solid var(--border);
+}}
+
+/* ── Diff ─────────────────────────────────────────────────────────────── */
+details{{border:1px solid var(--border);border-radius:8px;margin-bottom:12px;}}
+summary{{
+  cursor:pointer;padding:11px 16px;font-size:13px;font-weight:600;
+  background:var(--surface);border-radius:8px;list-style:none;
+  display:flex;align-items:center;gap:8px;
+}}
+summary::-webkit-details-marker{{display:none;}}
+details[open] summary{{border-radius:8px 8px 0 0;border-bottom:1px solid var(--border);}}
+.details-body{{padding:16px;background:var(--bg);border-radius:0 0 8px 8px;}}
+pre{{
+  font-family:var(--mono);font-size:12px;line-height:1.6;
+  overflow:auto;max-height:440px;white-space:pre-wrap;word-break:break-word;
+}}
+.add{{color:var(--add);}} .del{{color:var(--del);}} .ctx{{color:var(--muted);}}
+.cm-label{{font-size:11px;color:var(--muted);margin-bottom:8px;font-weight:500;}}
+
+/* ── Empty / error ────────────────────────────────────────────────────── */
+.empty{{text-align:center;padding:32px;color:var(--muted);font-size:13px;}}
+.err-box{{
+  background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);
+  color:#ffb4ae;border-radius:8px;padding:14px 16px;margin-bottom:16px;
+}}
+.no-reason{{color:var(--amber);font-style:italic;}}
+</style>
+</head>
+<body>
+<div class=""wrap"">
+
+<div class=""page-title"">PR Test Impact Report</div>
+<div class=""page-sub"">Generated {E(r.AnalyzedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))}</div>
 ");
 
+        // ── Error banner ─────────────────────────────────────────────────────────
         if (!r.Success)
-            sb.Append($"<div class=\"err\"><strong>Analysis failed:</strong> {E(r.ErrorMessage ?? "Unknown error")}</div>\n");
+            sb.Append($"<div class=\"err-box\"><strong>Analysis failed:</strong> {E(r.ErrorMessage ?? "Unknown error")}</div>\n");
 
-        // PR metadata
-        sb.Append("<h2>Pull Request</h2><div class=\"grid\">\n");
-        MC(sb, "PR ID",            pr?.Id.ToString() ?? "—");
-        MC(sb, "Title",            pr?.Title ?? "—");
-        MC(sb, "Source → Target",  pr is null ? "—" : $"{pr.SourceBranch} → {pr.TargetBranch}");
-        MC(sb, "Author",           pr?.Author ?? "—");
+        // ── Pull Request section ──────────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">Pull Request</div>\n");
+        sb.Append("<div class=\"meta-grid\">\n");
+        sb.Append($"  <div class=\"meta-card\"><div class=\"lbl\">PR ID</div><div class=\"val\">{E(pr?.Id.ToString() ?? "—")}</div></div>\n");
+        sb.Append($"  <div class=\"meta-card\"><div class=\"lbl\">Title</div><div class=\"val\">{E(pr?.Title ?? "—")}</div></div>\n");
+        sb.Append($"  <div class=\"meta-card\"><div class=\"lbl\">Source → Target</div><div class=\"val branch\">{E(pr?.SourceBranch ?? "—")} → {E(pr?.TargetBranch ?? "—")}</div></div>\n");
         sb.Append("</div>\n");
         if (!string.IsNullOrWhiteSpace(pr?.Description))
-            sb.Append($"<div class=\"mc\" style=\"margin-top:12px\"><div class=\"lbl\">Description</div><div style=\"margin-top:6px\">{E(pr!.Description)}</div></div>\n");
+            sb.Append($"<div class=\"meta-desc\">{E(pr!.Description)}</div>\n");
 
-        // Summary counts
-        sb.Append("<h2>Summary</h2><div class=\"grid\">\n");
-        MC(sb, "Impacted Scenarios", r.ImpactedScenarios.Count.ToString());
-        MC(sb, "HIGH",    r.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.High).ToString(),   "high");
-        MC(sb, "MEDIUM",  r.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.Medium).ToString(), "medium");
-        MC(sb, "VERIFY",  r.ImpactedScenarios.Count(s => s.Confidence == ConfidenceLevel.Verify).ToString(), "verify");
-        MC(sb, "Scenarios Scanned", r.AllScenarioCount.ToString());
-        MC(sb, "Changed Symbols",   r.ChangedSymbols.Count.ToString());
+        // ── Summary cards ─────────────────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">Summary</div>\n");
+        sb.Append("<div class=\"summary-grid\">\n");
+        sb.Append($"  <div class=\"stat-card stat-total\"><div class=\"lbl\">Impacted</div><div class=\"val\">{sorted.Count}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-high\"><div class=\"lbl\">High</div><div class=\"val\">{countHigh}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-medium\"><div class=\"lbl\">Medium</div><div class=\"val\">{countMedium}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-verify\"><div class=\"lbl\">Verify</div><div class=\"val\">{countVerify}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-neutral\"><div class=\"lbl\">Scanned</div><div class=\"val\">{r.AllScenarioCount}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-neutral\"><div class=\"lbl\">Symbols</div><div class=\"val\">{r.ChangedSymbols.Count}</div></div>\n");
         sb.Append("</div>\n");
 
-        // Legend
-        sb.Append(@"<div class=""legend""><strong>How to read the results:</strong><ul>
-<li><strong>Matched Change</strong> — the specific changed symbol (method, route, ColdFusion page, selector) Copilot linked this scenario to.</li>
-<li><strong>Confidence</strong> — <span class=""badge high"">HIGH</span> scenario's bound code directly references a changed symbol; <span class=""badge medium"">MEDIUM</span> same business behaviour but no direct code link; <span class=""badge verify"">VERIFY</span> plausible — manually confirm before relying on it.</li>
-<li><strong>Why Impacted</strong> — Copilot's one-line explanation for this scenario being flagged.</li>
-</ul></div>
-");
+        // ── Impacted scenarios ────────────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">Impacted Scenarios</div>\n");
 
-        // Impacted scenarios
-        sb.Append("<h2>Impacted Scenarios</h2>\n");
-        if (r.ImpactedScenarios.Count == 0)
+        if (sorted.Count == 0)
         {
-            sb.Append("<div class=\"empty\">No impacted scenarios found.</div>\n");
+            sb.Append("<div class=\"empty\">No impacted scenarios found for this PR.</div>\n");
         }
         else
         {
-            sb.Append("<div class=\"sc-list\">\n");
-            int idx = 1;
-            foreach (var s in r.ImpactedScenarios)
-            {
-                var cl = s.Confidence.ToString().ToLower();
-                var rc = $"row-{cl}";
-                sb.Append($@"<div class=""sc {rc}"">
-  <div class=""sc-hdr""><span style=""color:var(--muted);font-size:12px"">#{idx++}</span><strong>{E(s.ScenarioName)}</strong><span class=""badge {cl}"">{s.Confidence.ToString().ToUpper()}</span></div>
-  <div class=""sc-meta""><span><strong>Feature:</strong> <code>{E(s.FeatureFile)}</code></span><span><strong>Matched change:</strong> {E(s.MatchedChange)}</span></div>
-  <div class=""sc-reason""><strong>Why impacted:</strong> {(string.IsNullOrWhiteSpace(s.Reason) ? "<span class=\"reason-missing\">⚠️ Copilot did not provide a reason — treat as VERIFY.</span>" : E(s.Reason))}</div>
+            // Legend
+            sb.Append(@"<div class=""legend"">
+  <strong>Confidence levels:</strong>
+  <ul>
+    <li><span class=""badge badge-high"">HIGH</span> — scenario's bound code directly references a changed symbol.</li>
+    <li><span class=""badge badge-medium"">MEDIUM</span> — same business behaviour but no direct code-level link.</li>
+    <li><span class=""badge badge-verify"">VERIFY</span> — plausible match — manually confirm before relying on it.</li>
+  </ul>
 </div>
 ");
+
+            // Filter bar
+            sb.Append(@"<div class=""filter-bar"">
+  <span>Filter:</span>
+  <button class=""filter-btn active"" onclick=""filterTable('ALL')"">All</button>
+  <button class=""filter-btn f-high"" onclick=""filterTable('HIGH')"">HIGH</button>
+  <button class=""filter-btn f-medium"" onclick=""filterTable('MEDIUM')"">MEDIUM</button>
+  <button class=""filter-btn f-verify"" onclick=""filterTable('VERIFY')"">VERIFY</button>
+</div>
+");
+
+            // Table — sorted HIGH → MEDIUM → VERIFY
+            sb.Append("<div class=\"tbl-wrap\">\n<table id=\"results-table\">\n");
+            sb.Append("<thead><tr><th class=\"col-num\">#</th><th class=\"col-scenario\">Scenario</th><th class=\"col-file\">Feature File</th><th class=\"col-match\">Matched Change</th><th class=\"col-conf\">Confidence</th><th class=\"col-why\">Why Impacted</th></tr></thead>\n");
+            sb.Append("<tbody>\n");
+
+            int idx = 1;
+            foreach (var s in sorted)
+            {
+                var cl  = s.Confidence.ToString().ToLower();
+                var rc  = $"row-{cl}";
+                var bdg = $"badge-{cl}";
+                var conf = s.Confidence.ToString().ToUpper();
+                var reason = string.IsNullOrWhiteSpace(s.Reason)
+                    ? "<span class=\"no-reason\">— no reason provided</span>"
+                    : E(s.Reason);
+
+                sb.Append($@"<tr class=""{rc}"" data-conf=""{conf}"">
+  <td class=""col-num"">{idx++}</td>
+  <td class=""col-scenario""><strong>{E(s.ScenarioName)}</strong></td>
+  <td class=""col-file""><code>{E(s.FeatureFile)}</code></td>
+  <td class=""col-match"">{E(s.MatchedChange)}</td>
+  <td class=""col-conf""><span class=""badge {bdg}"">{conf}</span></td>
+  <td class=""col-why"">{reason}</td>
+</tr>
+");
             }
-            sb.Append("</div>\n");
+            sb.Append("</tbody>\n</table>\n</div>\n");
         }
 
-        // Changed symbols
-        sb.Append("<h2>Changed Symbols</h2>\n");
+        // ── Changed symbols ────────────────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">Changed Symbols</div>\n");
         if (r.ChangedSymbols.Count == 0)
         {
             sb.Append("<div class=\"empty\">No changed symbols extracted.</div>\n");
         }
         else
         {
-            sb.Append("<table><thead><tr><th>File</th><th>Symbol</th><th>Kind</th><th>Change</th><th>Context</th></tr></thead><tbody>\n");
+            sb.Append("<div class=\"tbl-wrap\">\n<table class=\"sym-tbl\">\n");
+            sb.Append("<thead><tr><th style=\"width:28%\">File</th><th style=\"width:24%\">Symbol</th><th style=\"width:12%\">Kind</th><th style=\"width:10%\">Change</th><th>Context</th></tr></thead>\n<tbody>\n");
             foreach (var sym in r.ChangedSymbols)
-                sb.Append($"<tr><td><code>{E(sym.File)}</code></td><td><strong>{E(sym.Symbol)}</strong>{(sym.OldSymbol != null ? $" <span style=\"color:var(--muted)\">(was: {E(sym.OldSymbol)})</span>" : "")}</td><td>{sym.Kind}</td><td>{sym.Change}</td><td>{E(sym.AdditionalContext ?? "")}</td></tr>\n");
-            sb.Append("</tbody></table>\n");
+            {
+                var oldPart = sym.OldSymbol != null ? $" <span class=\"old-sym\">(was: {E(sym.OldSymbol)})</span>" : "";
+                sb.Append($@"<tr>
+  <td><code>{E(sym.File)}</code></td>
+  <td><strong>{E(sym.Symbol)}</strong>{oldPart}</td>
+  <td>{sym.Kind}</td>
+  <td><span class=""change-badge"">{sym.Change}</span></td>
+  <td style=""font-size:12px;color:var(--muted)"">{E(sym.AdditionalContext ?? "")}</td>
+</tr>
+");
+            }
+            sb.Append("</tbody>\n</table>\n</div>\n");
         }
 
-        // PR diff
-        sb.Append("<h2>PR Diff</h2>\n");
+        // ── PR Diff ────────────────────────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">PR Diff</div>\n");
         if (string.IsNullOrWhiteSpace(r.RawDiffText))
             sb.Append("<div class=\"empty\">No diff text captured.</div>\n");
         else
-            sb.Append($"<details><summary>View raw diff ({r.RawDiffText.Split('\n').Length} lines)</summary><div class=\"db\"><pre class=\"diff\">{RenderDiff(r.RawDiffText)}</pre></div></details>\n");
+            sb.Append($"<details><summary>▶ View raw diff <span style=\"color:var(--muted);font-weight:400;font-size:12px\">({r.RawDiffText.Split('\n').Length} lines)</span></summary><div class=\"details-body\"><pre>{RenderDiff(r.RawDiffText)}</pre></div></details>\n");
 
-        // LLM exchanges
-        sb.Append("<h2>LLM Prompts &amp; Responses</h2>\n");
+        // ── LLM Exchanges ──────────────────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">LLM Prompts &amp; Responses</div>\n");
         if (r.LlmExchanges.Count == 0)
-        {
             sb.Append("<div class=\"empty\">No LLM exchanges recorded.</div>\n");
-        }
         else
-        {
             foreach (var ex in r.LlmExchanges)
-                sb.Append($@"<details><summary>Chunk {ex.ChunkIndex + 1} of {ex.TotalChunks} — {ex.ScenarioCount} scenarios sent, {ex.ParsedImpactedCount} impacted returned</summary>
-<div class=""db""><div class=""cm"">Prompt sent to Copilot:</div><pre>{E(ex.Prompt)}</pre>
-<div class=""cm"" style=""margin-top:14px"">Raw response from Copilot:</div><pre>{E(ex.RawResponse)}</pre></div></details>
+                sb.Append($@"<details>
+<summary>▶ Chunk {ex.ChunkIndex + 1} of {ex.TotalChunks} <span style=""color:var(--muted);font-weight:400;font-size:12px"">— {ex.ScenarioCount} scenarios sent · {ex.ParsedImpactedCount} impacted returned</span></summary>
+<div class=""details-body"">
+  <div class=""cm-label"">Prompt sent to Copilot:</div>
+  <pre>{E(ex.Prompt)}</pre>
+  <div class=""cm-label"" style=""margin-top:14px"">Raw response from Copilot:</div>
+  <pre>{E(ex.RawResponse)}</pre>
+</div></details>
 ");
-        }
 
+        // ── Filter JS ──────────────────────────────────────────────────────────────
+        sb.Append(@"
+<script>
+function filterTable(conf) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  const rows = document.querySelectorAll('#results-table tbody tr');
+  rows.forEach(row => {
+    row.style.display = (conf === 'ALL' || row.dataset.conf === conf) ? '' : 'none';
+  });
+}
+</script>
+");
         sb.Append("</div></body></html>");
         return sb.ToString();
-    }
-
-    private static void MC(StringBuilder sb, string label, string value, string? cls = null)
-    {
-        var c = cls != null ? $" {cls}" : "";
-        sb.Append($"<div class=\"mc\"><div class=\"lbl\">{E(label)}</div><div class=\"val{c}\">{E(value)}</div></div>\n");
     }
 
     private static string RenderDiff(string diff)
@@ -178,9 +368,9 @@ details[open] summary{{border-bottom:1px solid var(--border);}}
         foreach (var line in diff.Split('\n'))
         {
             var enc = WebUtility.HtmlEncode(line);
-            if (line.StartsWith("+")) sb.Append($"<span class=\"add\">{enc}</span>\n");
+            if (line.StartsWith("+"))      sb.Append($"<span class=\"add\">{enc}</span>\n");
             else if (line.StartsWith("-")) sb.Append($"<span class=\"del\">{enc}</span>\n");
-            else sb.Append($"<span class=\"ctx\">{enc}</span>\n");
+            else                           sb.Append($"<span class=\"ctx\">{enc}</span>\n");
         }
         return sb.ToString();
     }

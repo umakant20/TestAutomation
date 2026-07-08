@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.VisualStudio.Extensibility;
@@ -13,38 +14,32 @@ namespace PRImpactAnalyzer.Extension;
 /// <summary>
 /// Tools → Analyze PR Test Impact
 ///
-/// Step 1: Asks for a PR number, runs the full pipeline (diff fetch, symbol extraction,
-///         test repo scan, pre-filter, prompt build), copies the prompt to clipboard,
-///         opens Copilot Chat, and shows a notification telling you to paste.
-///
-/// After you paste into Copilot Chat and copy the response:
-///
-/// Step 2: Tools → Generate Impact Report — reads clipboard, parses JSON, writes HTML.
-///
-/// The pipeline runs entirely in-process using your existing library projects.
-/// No external LLM call. No API key. The only LLM involvement is YOU pasting into
-/// Copilot Chat manually — this command just makes that as frictionless as possible.
+/// Reads config, runs the full pipeline, writes prompt to a file, opens Copilot Chat,
+/// and shows instructions. The user pastes the prompt, copies Copilot's response to
+/// response.txt, then clicks Tools → Generate Impact Report.
 /// </summary>
 [VisualStudioContribution]
-[Command(CommandId, CommandDisplayName)]
-[CommandPlacement(KnownCommandPlacement.ToolsMenu)]
-[CommandIcon(KnownMonikers.TestSuite, IconSettings.IconAndText)]
-public class AnalyzePrCommand : Microsoft.VisualStudio.Extensibility.Commands.Command
+internal class AnalyzePrCommand : Command
 {
-    private const string CommandId = "PRImpactAnalyzer.AnalyzePr";
-    private const string CommandDisplayName = "Analyze PR Test Impact";
-
-    // Shared state: the prepared analysis is stored here so GenerateReportCommand
-    // can access it without re-running the pipeline. This is safe because both commands
-    // run in the same extension process, sequentially, triggered by user action.
+    /// <summary>Stores the prepared analysis so GenerateReportCommand can access it.</summary>
     internal static PreparedAnalysis? LastPreparedAnalysis { get; set; }
 
-    public AnalyzePrCommand()
+    public override CommandConfiguration CommandConfiguration => new("Analyze PR Test Impact")
+    {
+        Placements = new[] { CommandPlacement.KnownPlacements.ToolsMenu },
+        Icon = new CommandIconConfiguration(ImageMoniker.KnownValues.TestSuite, IconSettings.IconAndText),
+    };
+
+    public AnalyzePrCommand(VisualStudioExtensibility extensibility)
+        : base(extensibility)
     {
     }
 
     public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
     {
+        var configDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pr-impact");
+
         // ── 1. Load config ────────────────────────────────────────────────────
         ExtensionConfig config;
         try
@@ -53,62 +48,42 @@ public class AnalyzePrCommand : Microsoft.VisualStudio.Extensibility.Commands.Co
         }
         catch (Exception ex)
         {
-            await Extensibility.Shell().ShowPromptAsync(
+            await context.ShowPromptAsync(
                 $"Config Error:\n\n{ex.Message}",
                 PromptOptions.OK, ct);
             return;
         }
 
-        // Validate required fields
         if (string.IsNullOrWhiteSpace(config.PrBaseUrl) || string.IsNullOrWhiteSpace(config.TestRepoPath))
         {
-            await Extensibility.Shell().ShowPromptAsync(
+            await context.ShowPromptAsync(
                 "Config file is missing 'prBaseUrl' or 'testRepoPath'.\n\n" +
                 $"Edit: {ExtensionConfig.DefaultConfigPath}",
                 PromptOptions.OK, ct);
             return;
         }
 
-        // ── 2. Ask for PR number ──────────────────────────────────────────────
-        var prIdInput = await Extensibility.Shell().ShowPromptAsync(
-            "Enter the Pull Request number to analyze:",
-            PromptOptions.OKCancel, ct);
-
-        // The out-of-process extensibility model's ShowPromptAsync returns the button
-        // pressed, not text input. For text input we need a different approach.
-        // Since the new extensibility model has limited input UI, we'll use a simple
-        // workaround: read the PR number from a file, or use an InputBox via the
-        // legacy interop. For now, let's use the simplest approach that works:
-        // read the PR number from the config file itself.
-
-        // Actually, let's check if the config has a "prNumber" field:
-        // This is the simplest UX — user sets the PR number in config before clicking.
-        // We'll enhance with a proper input dialog later if needed.
-
-        // For now, fall back to reading from a simple text file next to config:
-        var prNumberFile = Path.Combine(
-            Path.GetDirectoryName(ExtensionConfig.DefaultConfigPath)!, "pr-number.txt");
+        // ── 2. Read PR number from file ───────────────────────────────────────
+        var prNumberFile = Path.Combine(configDir, "pr-number.txt");
 
         if (!File.Exists(prNumberFile))
         {
-            await Extensibility.Shell().ShowPromptAsync(
-                $"Create a file at:\n{prNumberFile}\n\n" +
-                "containing just the PR number (e.g. 16773).\n" +
-                "Then click Tools → Analyze PR Test Impact again.",
-                PromptOptions.OK, ct);
-
-            // Create the file with a placeholder so user just edits it
-            Directory.CreateDirectory(Path.GetDirectoryName(prNumberFile)!);
+            Directory.CreateDirectory(configDir);
             await File.WriteAllTextAsync(prNumberFile, "16773", ct);
+
+            await context.ShowPromptAsync(
+                $"Created: {prNumberFile}\n\n" +
+                "Edit that file with your PR number, then click\n" +
+                "Tools → Analyze PR Test Impact again.",
+                PromptOptions.OK, ct);
             return;
         }
 
         var prNumberText = (await File.ReadAllTextAsync(prNumberFile, ct)).Trim();
         if (!int.TryParse(prNumberText, out var prNumber))
         {
-            await Extensibility.Shell().ShowPromptAsync(
-                $"'{prNumberText}' is not a valid PR number.\n\n" +
-                $"Edit: {prNumberFile}",
+            await context.ShowPromptAsync(
+                $"'{prNumberText}' is not a valid PR number.\n\nEdit: {prNumberFile}",
                 PromptOptions.OK, ct);
             return;
         }
@@ -116,26 +91,21 @@ public class AnalyzePrCommand : Microsoft.VisualStudio.Extensibility.Commands.Co
         var pat = config.AzureDevOpsPat ?? Environment.GetEnvironmentVariable("ADO_PAT");
         if (string.IsNullOrWhiteSpace(pat))
         {
-            await Extensibility.Shell().ShowPromptAsync(
+            await context.ShowPromptAsync(
                 "No Azure DevOps PAT found.\n\n" +
-                "Set 'azureDevOpsPat' in config.json or the ADO_PAT environment variable.",
+                "Set 'azureDevOpsPat' in config.json or the ADO_PAT env var.",
                 PromptOptions.OK, ct);
             return;
         }
 
         var prUrl = $"{config.PrBaseUrl!.TrimEnd('/')}/pullrequest/{prNumber}";
 
-        // ── 3. Show progress and run the pipeline ─────────────────────────────
-        await Extensibility.Shell().ShowPromptAsync(
-            $"Analyzing PR #{prNumber}...\n\n" +
-            "This will take a few seconds. Click OK to start.",
-            PromptOptions.OK, ct);
-
+        // ── 3. Run the pipeline ───────────────────────────────────────────────
         PreparedAnalysis prepared;
         try
         {
             await using var facade = PrImpactAnalyzerFacade.Create(
-                services => services.AddPrImpactAnalyzer());
+                services => PRImpactAnalyzer.Infrastructure.PrImpactAnalyzerRegistration.AddPrImpactAnalyzer(services));
 
             prepared = await facade.PrepareAsync(new AnalysisRequest
             {
@@ -146,7 +116,7 @@ public class AnalyzePrCommand : Microsoft.VisualStudio.Extensibility.Commands.Co
         }
         catch (Exception ex)
         {
-            await Extensibility.Shell().ShowPromptAsync(
+            await context.ShowPromptAsync(
                 $"Pipeline error:\n\n{ex.Message}",
                 PromptOptions.OK, ct);
             return;
@@ -154,61 +124,50 @@ public class AnalyzePrCommand : Microsoft.VisualStudio.Extensibility.Commands.Co
 
         if (!string.IsNullOrEmpty(prepared.Warning))
         {
-            await Extensibility.Shell().ShowPromptAsync(
+            await context.ShowPromptAsync(
                 $"Warning:\n\n{prepared.Warning}\n\n" +
-                "No prompt was generated — nothing to send to Copilot for this PR.",
+                "No prompt generated for this PR.",
                 PromptOptions.OK, ct);
             return;
         }
 
-        // Store for GenerateReportCommand
         LastPreparedAnalysis = prepared;
 
-        // ── 4. Build combined prompt (all chunks in one) ──────────────────────
+        // ── 4. Write prompt file + state file ─────────────────────────────────
+        var promptFile = Path.Combine(configDir, "last-prompt.txt");
+        var stateFile  = Path.Combine(configDir, "last-state.json");
+
         var combinedPrompt = BuildCombinedPrompt(prepared);
-
-        // ── 5. Copy to clipboard ──────────────────────────────────────────────
-        // The out-of-process model doesn't have direct clipboard access, so we
-        // write to a temp file and tell the user to copy from there, OR we can
-        // use the interop clipboard helper.
-        var promptFile = Path.Combine(
-            Path.GetDirectoryName(ExtensionConfig.DefaultConfigPath)!, "last-prompt.txt");
         await File.WriteAllTextAsync(promptFile, combinedPrompt, ct);
-
-        // Also write the state file for the CLI fallback
-        var stateFile = Path.Combine(
-            Path.GetDirectoryName(ExtensionConfig.DefaultConfigPath)!, "last-state.json");
         await File.WriteAllTextAsync(stateFile,
             JsonSerializer.Serialize(prepared, new JsonSerializerOptions { WriteIndented = true }), ct);
 
-        // ── 6. Open Copilot Chat via the standard VS command ──────────────────
+        // ── 5. Open the prompt file in Notepad for easy Ctrl+A, Ctrl+C ────────
         try
         {
-            // This command ID opens the Copilot Chat tool window in Visual Studio
-            await Extensibility.Shell().ExecuteCommandAsync("GitHub.Copilot.Chat.Open", ct);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "notepad.exe",
+                Arguments = promptFile,
+                UseShellExecute = true
+            });
         }
-        catch
-        {
-            // If the command doesn't exist (older VS or Copilot not installed), skip silently
-        }
+        catch { /* ignore if notepad fails */ }
 
-        // ── 7. Show instructions ──────────────────────────────────────────────
-        var chunkInfo = prepared.PromptChunks.Count > 1
-            ? $"({prepared.PromptChunks.Count} sections combined into one prompt)\n"
-            : "";
-
-        await Extensibility.Shell().ShowPromptAsync(
-            $"PR #{prNumber} analyzed successfully!\n\n" +
+        // ── 6. Show instructions ──────────────────────────────────────────────
+        var scenarioCount = prepared.PromptChunks.Sum(c => c.ScenarioCount);
+        await context.ShowPromptAsync(
+            $"PR #{prNumber} analyzed!\n\n" +
             $"Changed symbols: {prepared.ChangedSymbols.Count}\n" +
-            $"Scenarios in prompt: {prepared.PromptChunks.Sum(c => c.ScenarioCount)}\n" +
-            chunkInfo +
-            $"\nPrompt saved to:\n{promptFile}\n\n" +
+            $"Scenarios in prompt: {scenarioCount}\n\n" +
+            $"Prompt opened in Notepad:\n{promptFile}\n\n" +
             "NEXT STEPS:\n" +
-            "1. Open the prompt file above, Select All (Ctrl+A), Copy (Ctrl+C)\n" +
-            "2. Paste (Ctrl+V) into Copilot Chat and press Enter\n" +
+            "1. In Notepad: Ctrl+A, Ctrl+C (select all, copy)\n" +
+            "2. In VS Copilot Chat: Ctrl+V, Enter (paste, send)\n" +
             "3. Wait for Copilot's JSON response\n" +
-            "4. Select ALL of Copilot's response, Copy (Ctrl+C)\n" +
-            "5. Click: Tools → Generate Impact Report",
+            "4. Select ALL of Copilot's response, Ctrl+C\n" +
+            $"5. Paste into: {Path.Combine(configDir, "response.txt")}\n" +
+            "6. Click: Tools → Generate Impact Report",
             PromptOptions.OK, ct);
     }
 
@@ -218,48 +177,37 @@ public class AnalyzePrCommand : Microsoft.VisualStudio.Extensibility.Commands.Co
             return prepared.PromptChunks[0].PromptText;
 
         var sb = new StringBuilder();
-
-        // Modify the first chunk's header to indicate multiple sections
         for (int i = 0; i < prepared.PromptChunks.Count; i++)
         {
+            var text = prepared.PromptChunks[i].PromptText;
             if (i == 0)
             {
-                // Replace the standard header with a multi-section instruction
-                var text = prepared.PromptChunks[i].PromptText;
-                var scenarioLineIdx = text.IndexOf("SCENARIOS", StringComparison.Ordinal);
-                if (scenarioLineIdx > 0)
+                // First chunk: keep the full header (instructions + symbols) and mark as multi-section
+                var scenarioIdx = text.IndexOf("SCENARIOS", StringComparison.Ordinal);
+                if (scenarioIdx > 0)
                 {
-                    sb.Append(text[..scenarioLineIdx]);
+                    sb.Append(text[..scenarioIdx]);
                     sb.AppendLine($"SCENARIOS — SECTION {i + 1} OF {prepared.PromptChunks.Count}:");
                     sb.AppendLine("(Analyze ALL sections. Return ONE combined JSON covering every section.)");
-                    var afterHeader = text.IndexOf('\n', scenarioLineIdx);
-                    if (afterHeader > 0) sb.Append(text[(afterHeader + 1)..]);
+                    var afterLine = text.IndexOf('\n', scenarioIdx);
+                    if (afterLine > 0) sb.Append(text[(afterLine + 1)..]);
                 }
-                else
-                {
-                    sb.Append(text);
-                }
+                else sb.Append(text);
             }
             else
             {
+                // Subsequent chunks: skip the repeated header/symbols, just append scenarios
                 sb.AppendLine();
                 sb.AppendLine($"════════ SECTION {i + 1} OF {prepared.PromptChunks.Count} ════════");
-                // Extract only the scenarios portion (skip the repeated header/symbols)
-                var text = prepared.PromptChunks[i].PromptText;
-                var scenarioLineIdx = text.IndexOf("SCENARIOS", StringComparison.Ordinal);
-                if (scenarioLineIdx >= 0)
+                var scenarioIdx = text.IndexOf("SCENARIOS", StringComparison.Ordinal);
+                if (scenarioIdx >= 0)
                 {
-                    var afterHeader = text.IndexOf('\n', scenarioLineIdx);
-                    if (afterHeader > 0) sb.Append(text[(afterHeader + 1)..]);
-                    else sb.Append(text[scenarioLineIdx..]);
+                    var afterLine = text.IndexOf('\n', scenarioIdx);
+                    sb.Append(afterLine > 0 ? text[(afterLine + 1)..] : text[scenarioIdx..]);
                 }
-                else
-                {
-                    sb.Append(text);
-                }
+                else sb.Append(text);
             }
         }
-
         return sb.ToString();
     }
 }

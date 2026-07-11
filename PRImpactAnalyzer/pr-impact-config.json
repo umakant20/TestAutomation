@@ -1,11 +1,12 @@
 {
-  "pr":             "https://dev.azure.com/yourorg/yourproject/_git/yourrepo/pullrequest/482",
-  "testRepoPath":   "C:\\source\\MyApp.Tests",
-  "devRepoPath":    "",
+  "prBaseUrl": "https://dev.azure.com/yourorg/yourproject/_git/yourrepo",
+  "pr": "",
+  "testRepoPath": "C:\\source\\MyApp.Tests",
+  "devRepoPath": "",
   "azureDevOpsPat": null,
-  "promptOutput":   "prompt.txt",
-  "stateOutput":    "state.json",
-  "responseFiles":  [],
-  "reportOutput":   "report.html",
-  "failOnImpact":   false
+  "promptOutput": "prompt.txt",
+  "stateOutput": "state.json",
+  "responseFiles": [],
+  "reportOutput": "report.html",
+  "failOnImpact": false
 }

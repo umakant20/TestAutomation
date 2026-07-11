@@ -1,0 +1,21 @@
+{
+  "servers": {
+    "pr-impact-mcp": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/PRImpactAnalyzer.McpServer/PRImpactAnalyzer.McpServer.csproj",
+        "--no-build"
+      ]
+    },
+    "pr-sentiment-mcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "${workspaceFolder}/pr-sentiment-mcp/server.py"
+      ]
+    }
+  }
+}

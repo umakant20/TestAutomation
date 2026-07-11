@@ -1,6 +1,0 @@
-{
-  "prBaseUrl": "https://dev.azure.com/yourorg/yourproject/_git/yourrepo",
-  "testRepoPath": "C:\\source\\MyApp.Tests",
-  "azureDevOpsPat": "your-ado-pat-here",
-  "reportOutputDir": "C:\\reports"
-}

@@ -7,8 +7,13 @@ You are running the PR Test Impact Analyzer end-to-end. Follow these steps in ex
 Do not skip steps, do not ask clarifying questions, and confirm each step's output before
 moving to the next.
 
-STEP 1: Run this terminal command from the solution root:
-pr-impact prepare pr-impact-config.json
+STEP 0: Determine the solution root directory — the folder containing PRImpactAnalyzer.sln
+and pr-impact-config.json. All following commands must be run FROM that directory (cd there
+first if your terminal's current directory is anywhere else).
+
+STEP 1: Run this terminal command from the solution root (relative paths only — do not
+hardcode any absolute path or drive letter):
+dotnet run --project ./PRImpactAnalyzer.Cli/PRImpactAnalyzer.Cli.csproj -- prepare pr-impact-config.json
 
 Wait for it to complete. Confirm it created prompt.txt and state.json in the solution root.
 If it reports a warning or error instead, stop and report that error — do not proceed.
@@ -27,7 +32,7 @@ STEP 5: Open pr-impact-config.json and set the "responseFiles" field to exactly 
 (overwrite any existing value, don't append).
 
 STEP 6: Run this terminal command from the solution root:
-pr-impact report pr-impact-config.json
+dotnet run --project ./PRImpactAnalyzer.Cli/PRImpactAnalyzer.Cli.csproj -- report pr-impact-config.json
 
 STEP 7: Report back:
 - Total impacted scenario count

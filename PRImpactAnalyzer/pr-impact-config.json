@@ -1,6 +1,5 @@
 {
   "prBaseUrl": "https://dev.azure.com/yourorg/yourproject/_git/yourrepo",
-  "pr": "",
   "testRepoPath": "C:\\source\\MyApp.Tests",
   "devRepoPath": "",
   "azureDevOpsPat": null,

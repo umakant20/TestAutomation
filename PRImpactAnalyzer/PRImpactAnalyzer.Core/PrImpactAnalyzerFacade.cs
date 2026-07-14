@@ -13,6 +13,11 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
     private readonly AnalysisPipeline _pipeline;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    /// <summary>Name of the small pointer file written into baseReportsFolder after each
+    /// prepare run, recording where that run's files live — lets the report step find them
+    /// automatically without any config editing.</summary>
+    private const string CurrentRunPointerFileName = "current-run.json";
+
     private PrImpactAnalyzerFacade(ServiceProvider provider)
     {
         _provider = provider;
@@ -46,6 +51,65 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
         File.WriteAllText(promptFilePath, RenderCombinedPromptFile(prepared), Encoding.UTF8);
         File.WriteAllText(stateFilePath, JsonSerializer.Serialize(prepared, JsonOptions), Encoding.UTF8);
         return prepared;
+    }
+
+    /// <summary>
+    /// Same as PrepareAndWriteFilesAsync, but automatically computes a dedicated run folder
+    /// named "{prId}_{yyyyMMdd-HHmmss}" under baseReportsFolder, using the PR's ACTUAL ID as
+    /// returned by Azure DevOps (not whatever string the caller passed in) — so the folder
+    /// name is always correct even if the CLI argument and the real PR number ever diverge.
+    /// Every run gets its own folder, so past runs are never overwritten.
+    /// </summary>
+    public async Task<RunResult> PrepareAndWriteFilesAutoAsync(
+        AnalysisRequest request, string baseReportsFolder, CancellationToken ct = default)
+    {
+        var prepared = await _pipeline.PrepareAsync(request, ct);
+        if (!string.IsNullOrEmpty(prepared.Warning))
+            return new RunResult { Prepared = prepared };
+
+        var prId = prepared.PrMetadata?.Id ?? 0;
+        var runFolder = Path.Combine(baseReportsFolder, $"{prId}_{DateTime.Now:yyyyMMdd-HHmmss}");
+        Directory.CreateDirectory(runFolder);
+
+        var promptPath = Path.Combine(runFolder, "prompt.txt");
+        var statePath  = Path.Combine(runFolder, "state.json");
+
+        File.WriteAllText(promptPath, RenderCombinedPromptFile(prepared), Encoding.UTF8);
+        File.WriteAllText(statePath, JsonSerializer.Serialize(prepared, JsonOptions), Encoding.UTF8);
+
+        // Write/update the pointer file so the report step can find this run automatically —
+        // no manual config editing needed.
+        Directory.CreateDirectory(baseReportsFolder);
+        var pointer = new CurrentRunPointer { RunFolder = runFolder, PrId = prId, StatePath = statePath };
+        File.WriteAllText(
+            Path.Combine(baseReportsFolder, CurrentRunPointerFileName),
+            JsonSerializer.Serialize(pointer, JsonOptions), Encoding.UTF8);
+
+        return new RunResult
+        {
+            Prepared   = prepared,
+            RunFolder  = runFolder,
+            PromptPath = promptPath,
+            StatePath  = statePath,
+            PrId       = prId,
+        };
+    }
+
+    /// <summary>
+    /// Reads the pointer file written by the most recent PrepareAndWriteFilesAutoAsync call,
+    /// so the report step can locate that run's folder without any argument or config field.
+    /// Returns null if no pointer file exists (e.g. prepare was never run, or used the older
+    /// PrepareAndWriteFilesAsync overload with explicit fixed paths instead).
+    /// </summary>
+    public static CurrentRunPointer? ReadCurrentRunPointer(string baseReportsFolder)
+    {
+        var path = Path.Combine(baseReportsFolder, CurrentRunPointerFileName);
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<CurrentRunPointer>(File.ReadAllText(path), JsonOptions);
+        }
+        catch { return null; }
     }
 
     /// <summary>
@@ -151,4 +215,24 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
     }
 
     public async ValueTask DisposeAsync() => await _provider.DisposeAsync();
+}
+
+/// <summary>Result of PrepareAndWriteFilesAutoAsync — tells the caller exactly where
+/// everything for this run was written.</summary>
+public class RunResult
+{
+    public PreparedAnalysis Prepared { get; set; } = new();
+    public string RunFolder  { get; set; } = string.Empty;
+    public string PromptPath { get; set; } = string.Empty;
+    public string StatePath  { get; set; } = string.Empty;
+    public int    PrId       { get; set; }
+}
+
+/// <summary>Small pointer record written to baseReportsFolder/current-run.json after each
+/// prepare run, so the report step can find the run's files automatically.</summary>
+public class CurrentRunPointer
+{
+    public string RunFolder { get; set; } = string.Empty;
+    public int    PrId      { get; set; }
+    public string StatePath { get; set; } = string.Empty;
 }

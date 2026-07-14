@@ -3,9 +3,6 @@
   "testRepoPath": "C:\\source\\MyApp.Tests",
   "devRepoPath": "",
   "azureDevOpsPat": null,
-  "promptOutput": "prompt.txt",
-  "stateOutput": "state.json",
-  "responseFiles": [],
-  "reportOutput": "report.html",
+  "reportsBaseDir": "Reports",
   "failOnImpact": false
 }

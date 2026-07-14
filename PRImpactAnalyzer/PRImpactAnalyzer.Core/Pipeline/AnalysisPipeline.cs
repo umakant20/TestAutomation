@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using PRImpactAnalyzer.Core.Interfaces;
 using PRImpactAnalyzer.Core.Models;
@@ -14,6 +15,11 @@ public class AnalysisPipeline
     private readonly ILogger<AnalysisPipeline> _logger;
 
     private const int ChunkSize = 80;
+
+    // Task 1: matches a scenario's tag against a work item ID, accepting the common
+    // conventions teams actually use for linking Gherkin tags to ADO work items.
+    private static readonly Regex WorkItemTagPattern = new(
+        @"^(?:WI|WORKITEM|BUG|US|TASK|AB)?#?(\d+)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public AnalysisPipeline(
         IPrDiffProvider prDiffProvider,
@@ -32,8 +38,9 @@ public class AnalysisPipeline
     }
 
     /// <summary>
-    /// Step A — purely local, no LLM call. Fetches the PR diff, extracts symbols, scans
-    /// the test repo, pre-filters, chunks, and builds prompt text for each chunk.
+    /// Step A — purely local, no LLM call. Fetches the PR diff + linked work items, extracts
+    /// symbols, scans the test repo, matches work-item tags, pre-filters, chunks, and builds
+    /// prompt text (now including work item context and code-change snippets) for each chunk.
     /// </summary>
     public async Task<PreparedAnalysis> PrepareAsync(AnalysisRequest request, CancellationToken ct = default)
     {
@@ -43,6 +50,8 @@ public class AnalysisPipeline
         var prDiff = await _prDiffProvider.GetDiffAsync(request, ct);
         prepared.PrMetadata = prDiff.Metadata;
         prepared.RawDiffText = prDiff.RawDiffText;
+        prepared.LinkedWorkItems = prDiff.LinkedWorkItems;
+        _logger.LogInformation("{Count} linked work item(s) found.", prDiff.LinkedWorkItems.Count);
 
         var symbols = new List<ChangedSymbol>();
         foreach (var fileDiff in prDiff.Files)
@@ -59,6 +68,10 @@ public class AnalysisPipeline
         prepared.ChangedSymbols = symbols;
         _logger.LogInformation("{Count} changed symbols extracted.", symbols.Count);
 
+        // Task 2: build compact code-change snippets (actual +/- lines, not just symbol names)
+        // so the LLM can see real code context as an extra clue, kept small and capped.
+        prepared.CodeSnippetsIncluded = BuildCodeSnippets(prDiff.Files);
+
         _logger.LogInformation("Scanning test repo at {Path}…", request.TestRepoLocalPath);
         var parser = _testParsers.FirstOrDefault(p => p.CanParse(request.TestRepoLocalPath))
             ?? throw new InvalidOperationException($"No test parser can handle the repo at '{request.TestRepoLocalPath}'.");
@@ -73,8 +86,32 @@ public class AnalysisPipeline
             return prepared;
         }
 
+        // Task 1: deterministically match each scenario's tags against the linked work item IDs.
+        var workItemIds = prDiff.LinkedWorkItems.Select(w => w.Id).ToHashSet();
+        if (workItemIds.Count > 0)
+        {
+            foreach (var s in scenarios)
+                s.MatchedWorkItemIds = s.Tags
+                    .Select(TryExtractWorkItemId)
+                    .Where(id => id.HasValue && workItemIds.Contains(id.Value))
+                    .Select(id => id!.Value)
+                    .Distinct()
+                    .ToList();
+
+            var matchedCount = scenarios.Count(s => s.MatchedWorkItemIds.Count > 0);
+            _logger.LogInformation("{Count} scenario(s) matched a linked work item via tags.", matchedCount);
+            prepared.WorkItemMatchedScenarios = scenarios.Where(s => s.MatchedWorkItemIds.Count > 0).ToList();
+        }
+
         var relevant = _promptBuilder.PreFilter(symbols, scenarios);
         _logger.LogInformation("Pre-filter kept {Relevant} of {Total} scenarios.", relevant.Count, scenarios.Count);
+
+        // Always keep work-item-matched scenarios even if the keyword pre-filter missed them —
+        // a confirmed traceability link is a stronger signal than keyword overlap.
+        var workItemMatched = scenarios.Where(s => s.MatchedWorkItemIds.Count > 0).ToList();
+        foreach (var wm in workItemMatched)
+            if (!relevant.Any(r => r.FeatureFile == wm.FeatureFile && r.ScenarioName == wm.ScenarioName))
+                relevant.Add(wm);
 
         if (relevant.Count == 0)
         {
@@ -89,7 +126,7 @@ public class AnalysisPipeline
             {
                 ChunkIndex = i,
                 TotalChunks = chunks.Count,
-                PromptText = _promptBuilder.Build(prDiff.Metadata, symbols, chunks[i]),
+                PromptText = _promptBuilder.Build(prDiff.Metadata, symbols, chunks[i], prDiff.LinkedWorkItems, prepared.CodeSnippetsIncluded),
                 ScenarioCount = chunks[i].Count
             });
         }
@@ -98,9 +135,9 @@ public class AnalysisPipeline
     }
 
     /// <summary>
-    /// Step B — parses the raw Copilot Chat response(s) you pasted back, dedupes, and ranks.
-    /// Accepts either one response per chunk, OR a single combined response file containing
-    /// all chunk replies (the facade's SplitCombinedResponses handles the splitting).
+    /// Step B — parses the raw Copilot Chat response(s) you pasted back, dedupes, ranks, and
+    /// applies a deterministic backstop: any scenario matched to a linked work item is
+    /// force-included at HIGH confidence even if the LLM's JSON omitted or under-rated it.
     /// </summary>
     public AnalysisResult Finalize(PreparedAnalysis prepared, List<string> rawResponsesInOrder)
     {
@@ -111,10 +148,10 @@ public class AnalysisPipeline
             ChangedSymbols = prepared.ChangedSymbols,
             AllScenarioCount = prepared.AllScenarioCount,
             RawDiffText = prepared.RawDiffText,
+            LinkedWorkItems = prepared.LinkedWorkItems,
+            CodeSnippetsIncluded = prepared.CodeSnippetsIncluded,
         };
 
-        // Too many responses is the only hard error — too few means the combined-file
-        // splitter gave us what it could; we process what we have.
         if (rawResponsesInOrder.Count > prepared.PromptChunks.Count)
         {
             result.Success = false;
@@ -142,15 +179,93 @@ public class AnalysisPipeline
             });
         }
 
-        result.ImpactedScenarios = allImpacted
+        var merged = allImpacted
             .GroupBy(s => (s.FeatureFile, s.ScenarioName))
             .Select(g => g.OrderByDescending(s => s.Confidence).First())
+            .ToDictionary(s => (s.FeatureFile, s.ScenarioName));
+
+        // Task 1 backstop: force-include/upgrade every work-item-matched scenario to HIGH,
+        // regardless of what the LLM returned — a confirmed tag-to-work-item link is a
+        // deterministic fact, not something that should be left to LLM discretion.
+        foreach (var wiScenario in GetWorkItemMatchedScenarios(prepared))
+        {
+            var key = (wiScenario.FeatureFile, wiScenario.ScenarioName);
+            if (merged.TryGetValue(key, out var existing))
+            {
+                existing.Confidence = ConfidenceLevel.High;
+                existing.MatchedWorkItemIds = wiScenario.MatchedWorkItemIds;
+                if (!existing.Reason.Contains("work item", StringComparison.OrdinalIgnoreCase))
+                    existing.Reason = $"Linked to work item #{string.Join(", #", wiScenario.MatchedWorkItemIds)}. {existing.Reason}".Trim();
+            }
+            else
+            {
+                merged[key] = new ImpactedScenario
+                {
+                    ScenarioName  = wiScenario.ScenarioName,
+                    FeatureFile   = wiScenario.FeatureFile,
+                    MatchedChange = "Work item traceability tag",
+                    Confidence    = ConfidenceLevel.High,
+                    Reason        = $"Linked to work item #{string.Join(", #", wiScenario.MatchedWorkItemIds)} associated with this PR.",
+                    MatchedWorkItemIds = wiScenario.MatchedWorkItemIds,
+                };
+            }
+        }
+
+        result.ImpactedScenarios = merged.Values
             .OrderByDescending(s => s.Confidence)
             .ThenBy(s => s.FeatureFile)
             .ToList();
 
         _logger.LogInformation("Finalized — {Count} impacted scenarios.", result.ImpactedScenarios.Count);
         return result;
+    }
+
+    /// <summary>Re-derives which scenarios matched a work item — cheap enough to recompute
+    /// from the prompt chunks' scenario data rather than persisting a parallel list.</summary>
+    private static List<ScenarioRecord> GetWorkItemMatchedScenarios(PreparedAnalysis prepared) =>
+        prepared.WorkItemMatchedScenarios;
+
+    private static int? TryExtractWorkItemId(string tag)
+    {
+        var m = WorkItemTagPattern.Match(tag.Trim());
+        return m.Success && int.TryParse(m.Groups[1].Value, out var id) ? id : null;
+    }
+
+    /// <summary>
+    /// Task 2: builds a compact, capped set of actual code-change snippets (real +/- lines,
+    /// not just extracted symbol names) so the LLM has genuine code context as an extra clue
+    /// for correlating changes with feature files. Bounded per-file and in total to protect
+    /// the token budget the rest of the prompt already works hard to minimize.
+    /// </summary>
+    private static string BuildCodeSnippets(List<FileDiff> files, int maxLinesPerFile = 12, int maxTotalLines = 120)
+    {
+        var sb = new System.Text.StringBuilder();
+        int totalLines = 0;
+
+        foreach (var file in files)
+        {
+            if (totalLines >= maxTotalLines) break;
+
+            var changedLines = file.Hunks
+                .SelectMany(h => h.Lines)
+                .Where(l => l.Type != DiffLineType.Context)
+                .Take(maxLinesPerFile)
+                .ToList();
+
+            if (changedLines.Count == 0) continue;
+
+            sb.AppendLine($"[{file.FilePath}]");
+            foreach (var line in changedLines)
+            {
+                if (totalLines >= maxTotalLines) break;
+                var marker = line.Type == DiffLineType.Added ? "+" : "-";
+                var text = line.Content.Length > 140 ? line.Content[..140] + "…" : line.Content;
+                sb.AppendLine($"{marker}{text.TrimEnd()}");
+                totalLines++;
+            }
+        }
+
+        return sb.ToString();
     }
 
     private static List<List<ScenarioRecord>> ChunkScenarios(List<ScenarioRecord> scenarios, int chunkSize)
@@ -170,6 +285,18 @@ public class PreparedAnalysis
     public string RawDiffText { get; set; } = string.Empty;
     public List<PromptChunk> PromptChunks { get; set; } = new();
     public string? Warning { get; set; }
+
+    /// <summary>Task 1: work items linked to the PR, used to enrich the prompt and match
+    /// against feature file tags.</summary>
+    public List<WorkItemInfo> LinkedWorkItems { get; set; } = new();
+
+    /// <summary>Task 2: the actual code-change snippet text included in the prompt.</summary>
+    public string CodeSnippetsIncluded { get; set; } = string.Empty;
+
+    /// <summary>Scenarios that matched a linked work item via tags — persisted here so
+    /// Finalize() can apply the deterministic HIGH-confidence backstop even after a
+    /// round-trip through state.json (tags/matches don't need re-parsing the test repo).</summary>
+    public List<ScenarioRecord> WorkItemMatchedScenarios { get; set; } = new();
 }
 
 public class PromptChunk

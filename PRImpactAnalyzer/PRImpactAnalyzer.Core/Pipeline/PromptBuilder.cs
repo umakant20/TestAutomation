@@ -8,13 +8,17 @@ public class PromptBuilder
 {
     private const int MaxScenariosGlobal = 400;
 
-    public string Build(PrMetadata prMetadata, List<ChangedSymbol> symbols, List<ScenarioRecord> scenarios)
+    public string Build(
+        PrMetadata prMetadata, List<ChangedSymbol> symbols, List<ScenarioRecord> scenarios,
+        List<WorkItemInfo>? linkedWorkItems = null, string? codeSnippets = null)
     {
         var sb = new StringBuilder();
+        linkedWorkItems ??= new List<WorkItemInfo>();
 
         // ── System instructions ───────────────────────────────────────────────
         sb.AppendLine("Test impact analyzer for .NET/ColdFusion/SOAP code tested via C# SpecFlow/Reqnroll.");
         sb.AppendLine("Do NOT ask clarifying questions. Use ONLY the data below. Match on name/steps if bound refs are absent, rate M or V accordingly.");
+        sb.AppendLine("Scenarios marked [WI-MATCH] are already confirmed HIGH via work item traceability — keep them H unless clearly wrong.");
         sb.AppendLine("Return ONLY this JSON, no prose, no markdown fences:");
         sb.AppendLine("{\"impacted\":[{\"s\":\"<scenario name>\",\"f\":\"<feature file>\",\"m\":\"<matched change>\",\"c\":\"H|M|V\",\"r\":\"<reason <12 words>\"}]}");
         sb.AppendLine("c: H=direct symbol match, M=semantic/behavioral, V=plausible unconfirmed. Omit non-matches.");
@@ -25,6 +29,23 @@ public class PromptBuilder
         if (!string.IsNullOrWhiteSpace(prMetadata.Description))
             sb.AppendLine(Truncate(Sanitize(prMetadata.Description), 200));
         sb.AppendLine();
+
+        // ── Task 1: linked work items (requirement/repro context) ────────────
+        if (linkedWorkItems.Count > 0)
+        {
+            sb.AppendLine($"LINKED WORK ITEMS ({linkedWorkItems.Count}) — use as extra context for what behavior should be tested:");
+            foreach (var wi in linkedWorkItems)
+            {
+                sb.AppendLine($"#{wi.Id} [{wi.Type}] {Sanitize(wi.Title)}");
+                if (!string.IsNullOrWhiteSpace(wi.Description))
+                    sb.AppendLine($"  desc: {Truncate(Sanitize(wi.Description), 150)}");
+                if (!string.IsNullOrWhiteSpace(wi.ReproSteps))
+                    sb.AppendLine($"  repro: {Truncate(Sanitize(wi.ReproSteps), 150)}");
+                if (wi.DiscussionComments.Count > 0)
+                    sb.AppendLine($"  notes: {Truncate(Sanitize(string.Join(" / ", wi.DiscussionComments)), 150)}");
+            }
+            sb.AppendLine();
+        }
 
         // ── Changed symbols — deduplicated by (symbol+kind) ───────────────────
         var dedupedSymbols = symbols
@@ -72,6 +93,14 @@ public class PromptBuilder
         }
         sb.AppendLine();
 
+        // ── Task 2: code-change snippets (real code, not just symbol names) ──
+        if (!string.IsNullOrWhiteSpace(codeSnippets))
+        {
+            sb.AppendLine("CODE CHANGE SNIPPETS (actual diff lines, capped — extra clue for correlating with feature files):");
+            sb.AppendLine(codeSnippets.TrimEnd());
+            sb.AppendLine();
+        }
+
         // ── Scenarios — grouped by feature file, path prefix stripped ─────────
         //
         // Token saving techniques applied here:
@@ -82,6 +111,7 @@ public class PromptBuilder
         //   5. Bound refs filtered to only those that overlap with changed symbol keywords
         //   6. Step count capped at 3 (was 5) — 3 is enough for matching signal
         //   7. Steps omitted entirely for scenarios with strong bound-ref signal (HIGH-likely)
+        //   8. Work-item-matched scenarios flagged [WI-MATCH] (Task 1)
 
         var symbolKeywords = BuildKeywordSet(dedupedSymbols);
         var commonPrefix   = FindCommonPrefix(scenarios.Select(s => NormPath(s.FeatureFile)).ToList());
@@ -110,11 +140,12 @@ public class PromptBuilder
 
                 // Sanitize scenario name — backslashes and double quotes break parsing
                 var name = Sanitize(s.ScenarioName);
+                var wiFlag = s.MatchedWorkItemIds.Count > 0 ? $"[WI-MATCH #{string.Join(",#", s.MatchedWorkItemIds)}] " : "";
 
                 if (hasStrongSignal)
-                    sb.AppendLine($"  {name}|{relevantBound}");
+                    sb.AppendLine($"  {wiFlag}{name}|{relevantBound}");
                 else
-                    sb.AppendLine($"  {name}||{steps}");
+                    sb.AppendLine($"  {wiFlag}{name}||{steps}");
             }
         }
 

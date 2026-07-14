@@ -162,6 +162,22 @@ td{{padding:10px 12px;vertical-align:top;}}
 .badge-high{{background:var(--green-bg);color:var(--green);border:1px solid var(--green-bd);}}
 .badge-medium{{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bd);}}
 .badge-verify{{background:var(--grey-bg);color:var(--grey);border:1px solid var(--grey-bd);}}
+.badge-wi{{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);margin-left:6px;}}
+
+/* ── Work items ───────────────────────────────────────────────────────── */
+.wi-card{{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:12px 16px;margin-bottom:10px;
+}}
+.wi-card .wi-head{{display:flex;gap:8px;align-items:center;margin-bottom:6px;}}
+.wi-card .wi-id{{color:var(--blue);font-weight:700;font-size:13px;}}
+.wi-card .wi-type{{
+  font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;color:var(--muted);
+}}
+.wi-card .wi-title{{font-weight:600;font-size:13px;}}
+.wi-card .wi-field{{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5;}}
+.wi-card .wi-field strong{{color:var(--text);font-weight:600;}}
 
 /* ── Legend ───────────────────────────────────────────────────────────── */
 .legend{{
@@ -227,6 +243,33 @@ pre{{
         if (!string.IsNullOrWhiteSpace(pr?.Description))
             sb.Append($"<div class=\"meta-desc\">{E(pr!.Description)}</div>\n");
 
+        // ── Task 1: Related Work Items ──────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">Related Work Items</div>\n");
+        if (r.LinkedWorkItems.Count == 0)
+        {
+            sb.Append("<div class=\"empty\">No work items linked to this PR.</div>\n");
+        }
+        else
+        {
+            sb.Append("<div class=\"legend\">These work items were pulled from Azure DevOps and used to enrich the analysis prompt. Scenarios tagged with a matching work item ID were automatically force-included at HIGH confidence (see the <span class=\"badge badge-wi\">WI #id</span> badge in the table below).</div>\n");
+            foreach (var wi in r.LinkedWorkItems)
+            {
+                sb.Append($"<div class=\"wi-card\">\n");
+                sb.Append($"  <div class=\"wi-head\"><span class=\"wi-id\">#{wi.Id}</span><span class=\"wi-type\">{E(wi.Type)}</span><span class=\"wi-title\">{E(wi.Title)}</span></div>\n");
+                if (!string.IsNullOrWhiteSpace(wi.Description))
+                    sb.Append($"  <div class=\"wi-field\"><strong>Description:</strong> {E(wi.Description)}</div>\n");
+                if (!string.IsNullOrWhiteSpace(wi.ReproSteps))
+                    sb.Append($"  <div class=\"wi-field\"><strong>Repro steps:</strong> {E(wi.ReproSteps)}</div>\n");
+                if (!string.IsNullOrWhiteSpace(wi.AcceptanceCriteria))
+                    sb.Append($"  <div class=\"wi-field\"><strong>Acceptance criteria:</strong> {E(wi.AcceptanceCriteria)}</div>\n");
+                if (wi.Tags.Count > 0)
+                    sb.Append($"  <div class=\"wi-field\"><strong>Tags:</strong> {E(string.Join(", ", wi.Tags))}</div>\n");
+                if (wi.DiscussionComments.Count > 0)
+                    sb.Append($"  <div class=\"wi-field\"><strong>Discussion:</strong> {E(string.Join(" — ", wi.DiscussionComments))}</div>\n");
+                sb.Append("</div>\n");
+            }
+        }
+
         // ── Summary cards ─────────────────────────────────────────────────────────
         sb.Append("<div class=\"section-head\">Summary</div>\n");
         sb.Append("<div class=\"summary-grid\">\n");
@@ -283,10 +326,13 @@ pre{{
                 var reason = string.IsNullOrWhiteSpace(s.Reason)
                     ? "<span class=\"no-reason\">— no reason provided</span>"
                     : E(s.Reason);
+                var wiBadge = s.MatchedWorkItemIds.Count > 0
+                    ? $"<span class=\"badge badge-wi\">WI #{string.Join(", #", s.MatchedWorkItemIds)}</span>"
+                    : "";
 
                 sb.Append($@"<tr class=""{rc}"" data-conf=""{conf}"">
   <td class=""col-num"">{idx++}</td>
-  <td class=""col-scenario""><strong>{E(s.ScenarioName)}</strong></td>
+  <td class=""col-scenario""><strong>{E(s.ScenarioName)}</strong>{wiBadge}</td>
   <td class=""col-file""><code>{E(s.FeatureFile)}</code></td>
   <td class=""col-match"">{E(s.MatchedChange)}</td>
   <td class=""col-conf""><span class=""badge {bdg}"">{conf}</span></td>
@@ -328,6 +374,13 @@ pre{{
             sb.Append("<div class=\"empty\">No diff text captured.</div>\n");
         else
             sb.Append($"<details><summary>▶ View raw diff <span style=\"color:var(--muted);font-weight:400;font-size:12px\">({r.RawDiffText.Split('\n').Length} lines)</span></summary><div class=\"details-body\"><pre>{RenderDiff(r.RawDiffText)}</pre></div></details>\n");
+
+        // ── Task 2: Code snippets included in the analysis ────────────────────────
+        sb.Append("<div class=\"section-head\">Code Change Snippets Sent to LLM</div>\n");
+        if (string.IsNullOrWhiteSpace(r.CodeSnippetsIncluded))
+            sb.Append("<div class=\"empty\">No code snippets were included (either no changes qualified, or this report predates this feature).</div>\n");
+        else
+            sb.Append($"<details><summary>▶ View code snippets <span style=\"color:var(--muted);font-weight:400;font-size:12px\">(actual +/- lines given to the LLM as extra context)</span></summary><div class=\"details-body\"><pre>{RenderDiff(r.CodeSnippetsIncluded)}</pre></div></details>\n");
 
         // ── LLM Exchanges ──────────────────────────────────────────────────────────
         sb.Append("<div class=\"section-head\">LLM Prompts &amp; Responses</div>\n");

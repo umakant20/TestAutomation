@@ -7,6 +7,20 @@ public class PrDiff
     public PrMetadata Metadata { get; set; } = new(0, "", "", "", "", "");
     public List<FileDiff> Files { get; set; } = new();
     public string RawDiffText { get; set; } = string.Empty;
+    public List<WorkItemInfo> LinkedWorkItems { get; set; } = new();
+}
+
+/// <summary>A work item (User Story/Bug/Task) linked to the PR in Azure DevOps.</summary>
+public class WorkItemInfo
+{
+    public int Id { get; set; }
+    public string Type { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string ReproSteps { get; set; } = string.Empty;
+    public string AcceptanceCriteria { get; set; } = string.Empty;
+    public List<string> Tags { get; set; } = new();
+    public List<string> DiscussionComments { get; set; } = new();
 }
 
 public record PrMetadata(
@@ -94,6 +108,11 @@ public class ScenarioRecord
     public List<string> BoundColdFusionPages { get; set; } = new();
     public List<string> BoundSelectors { get; set; } = new();
     public bool IsOutline { get; set; }
+
+    /// <summary>Work item IDs (from the PR's linked work items) found in this scenario's tags
+    /// or feature/scenario text — a deterministic, non-LLM signal used to force-prioritize
+    /// scenarios that are explicitly traceable to the same requirement as the PR.</summary>
+    public List<int> MatchedWorkItemIds { get; set; } = new();
 }
 
 // ── Result models ─────────────────────────────────────────────────────────────
@@ -107,6 +126,10 @@ public class ImpactedScenario
     public string MatchedChange { get; set; } = string.Empty;
     public ConfidenceLevel Confidence { get; set; }
     public string Reason { get; set; } = string.Empty;
+
+    /// <summary>Non-null when this scenario was force-included/upgraded because it's tagged
+    /// with a work item ID linked to this PR — a deterministic signal, not an LLM guess.</summary>
+    public List<int> MatchedWorkItemIds { get; set; } = new();
 }
 
 public class AnalysisResult
@@ -120,6 +143,14 @@ public class AnalysisResult
     public string RawDiffText { get; set; } = string.Empty;
     public List<LlmExchange> LlmExchanges { get; set; } = new();
     public DateTime AnalyzedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Work items linked to the PR — surfaced in the report for transparency
+    /// (Task 1: work item context used to build the prompt).</summary>
+    public List<WorkItemInfo> LinkedWorkItems { get; set; } = new();
+
+    /// <summary>The exact code-change snippet text that was included in the prompt sent to
+    /// the LLM — surfaced in the report for transparency (Task 2: code changes as a clue).</summary>
+    public string CodeSnippetsIncluded { get; set; } = string.Empty;
 }
 
 public class LlmExchange

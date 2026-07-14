@@ -10,6 +10,10 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
 {
     public async Task<PrDiff> GetDiffAsync(AnalysisRequest request, CancellationToken cancellationToken = default)
     {
+        // This provider is registered as a DI singleton, so per-run state must be reset here —
+        // otherwise warnings from a previous PR's analysis would leak into this one.
+        LastContentFetchWarnings.Clear();
+
         var (orgUrl, project, repo, prId) = ParsePrUrl(request.DevRepoPrUrl);
         using var http = CreateHttpClient(request.AzureDevOpsPat);
 
@@ -29,6 +33,7 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
             Metadata = prMeta,
             Files = fileDiffs,
             LinkedWorkItems = workItems,
+            ContentFetchWarnings = new List<string>(LastContentFetchWarnings),
             RawDiffText = string.Join("\n\n", fileDiffs.Select(f =>
                 $"=== {f.FilePath} ({f.ChangeType}) ===\n" +
                 string.Join("\n", f.Hunks.SelectMany(h => h.Lines.Select(l =>
@@ -233,10 +238,60 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
     {
         try
         {
-            var url = $"{orgUrl}/{project}/_apis/git/repositories/{repo}/items?path={Uri.EscapeDataString(path)}&versionDescriptor.version={Uri.EscapeDataString(branch)}&versionDescriptor.versionType=branch&api-version=7.0";
-            return await http.GetStringAsync(url, ct);
+            // IMPORTANT: "download=true" forces Azure DevOps to return the RAW file bytes/text.
+            // Without it, this endpoint can return a JSON metadata envelope (objectId,
+            // gitObjectType, etc.) instead of actual file content — which would make every
+            // downstream analyzer (Roslyn parsing, regex scanners) see garbage and extract
+            // zero real symbols, silently degrading the whole pipeline to work-item-only signal.
+            var url = $"{orgUrl}/{project}/_apis/git/repositories/{repo}/items" +
+                      $"?path={Uri.EscapeDataString(path)}" +
+                      $"&versionDescriptor.version={Uri.EscapeDataString(branch)}" +
+                      $"&versionDescriptor.versionType=branch" +
+                      $"&download=true" +
+                      $"&api-version=7.0";
+
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Accept.Clear();
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
+
+            var resp = await http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                LastContentFetchWarnings.Add(
+                    $"{path} ({branch}): HTTP {(int)resp.StatusCode} — file content not retrieved, this file's changes will be invisible to symbol extraction.");
+                return string.Empty;
+            }
+
+            var content = await resp.Content.ReadAsStringAsync(ct);
+
+            // Defensive check: if despite download=true we still got back something that looks
+            // like ADO's item metadata JSON rather than source, surface it as a warning instead
+            // of silently feeding garbage into Roslyn/regex analyzers.
+            if (LooksLikeAdoMetadataEnvelope(content))
+            {
+                LastContentFetchWarnings.Add(
+                    $"{path} ({branch}): received metadata instead of raw content — check ADO API version/permissions.");
+                return string.Empty;
+            }
+
+            return content;
         }
-        catch { return string.Empty; }
+        catch (Exception ex)
+        {
+            LastContentFetchWarnings.Add($"{path} ({branch}): {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Populated during GetDiffAsync — surfaced to the caller/report so silent content
+    /// fetch failures are visible instead of quietly degrading analysis to work-item-only signal.</summary>
+    public List<string> LastContentFetchWarnings { get; } = new();
+
+    private static bool LooksLikeAdoMetadataEnvelope(string content)
+    {
+        var trimmed = content.TrimStart();
+        if (!trimmed.StartsWith("{")) return false;
+        return trimmed.Contains("\"objectId\"") && trimmed.Contains("\"gitObjectType\"") && trimmed.Length < 500;
     }
 
     private List<HunkDiff> BuildHunks(string oldContent, string newContent)

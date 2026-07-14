@@ -8,6 +8,11 @@ public class PrDiff
     public List<FileDiff> Files { get; set; } = new();
     public string RawDiffText { get; set; } = string.Empty;
     public List<WorkItemInfo> LinkedWorkItems { get; set; } = new();
+
+    /// <summary>Non-fatal warnings from fetching individual file contents (e.g. a file's old/new
+    /// content couldn't be retrieved) — surfaced so degraded symbol extraction is visible
+    /// instead of silently producing an empty "Changed Symbols" section.</summary>
+    public List<string> ContentFetchWarnings { get; set; } = new();
 }
 
 /// <summary>A work item (User Story/Bug/Task) linked to the PR in Azure DevOps.</summary>
@@ -151,6 +156,10 @@ public class AnalysisResult
     /// <summary>The exact code-change snippet text that was included in the prompt sent to
     /// the LLM — surfaced in the report for transparency (Task 2: code changes as a clue).</summary>
     public string CodeSnippetsIncluded { get; set; } = string.Empty;
+
+    /// <summary>Non-fatal warnings if some files' content couldn't be fetched — a likely cause
+    /// of thin/empty Changed Symbols or Code Snippets sections if this is non-empty.</summary>
+    public List<string> ContentFetchWarnings { get; set; } = new();
 }
 
 public class LlmExchange

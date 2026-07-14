@@ -17,6 +17,8 @@ public class PromptBuilder
 
         // ── System instructions ───────────────────────────────────────────────
         sb.AppendLine("Test impact analyzer for .NET/ColdFusion/SOAP code tested via C# SpecFlow/Reqnroll.");
+        sb.AppendLine("PRIMARY evidence = CHANGED SYMBOLS and CODE CHANGE SNIPPETS below — base your match and confidence on these first.");
+        sb.AppendLine("LINKED WORK ITEMS are SECONDARY, corroborating context (what the change is meant to do) — use them to understand intent and to break ties, not as a substitute for code-level evidence.");
         sb.AppendLine("Do NOT ask clarifying questions. Use ONLY the data below. Match on name/steps if bound refs are absent, rate M or V accordingly.");
         sb.AppendLine("Scenarios marked [WI-MATCH] are already confirmed HIGH via work item traceability — keep them H unless clearly wrong.");
         sb.AppendLine("Return ONLY this JSON, no prose, no markdown fences:");

@@ -51,7 +51,10 @@ public class AnalysisPipeline
         prepared.PrMetadata = prDiff.Metadata;
         prepared.RawDiffText = prDiff.RawDiffText;
         prepared.LinkedWorkItems = prDiff.LinkedWorkItems;
+        prepared.ContentFetchWarnings = prDiff.ContentFetchWarnings;
         _logger.LogInformation("{Count} linked work item(s) found.", prDiff.LinkedWorkItems.Count);
+        if (prDiff.ContentFetchWarnings.Count > 0)
+            _logger.LogWarning("{Count} file(s) had content fetch issues — symbol extraction for those files will be degraded. See report for details.", prDiff.ContentFetchWarnings.Count);
 
         var symbols = new List<ChangedSymbol>();
         foreach (var fileDiff in prDiff.Files)
@@ -150,6 +153,7 @@ public class AnalysisPipeline
             RawDiffText = prepared.RawDiffText,
             LinkedWorkItems = prepared.LinkedWorkItems,
             CodeSnippetsIncluded = prepared.CodeSnippetsIncluded,
+            ContentFetchWarnings = prepared.ContentFetchWarnings,
         };
 
         if (rawResponsesInOrder.Count > prepared.PromptChunks.Count)
@@ -297,6 +301,9 @@ public class PreparedAnalysis
     /// Finalize() can apply the deterministic HIGH-confidence backstop even after a
     /// round-trip through state.json (tags/matches don't need re-parsing the test repo).</summary>
     public List<ScenarioRecord> WorkItemMatchedScenarios { get; set; } = new();
+
+    /// <summary>Non-fatal warnings if some files' content couldn't be fetched.</summary>
+    public List<string> ContentFetchWarnings { get; set; } = new();
 }
 
 public class PromptChunk

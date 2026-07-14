@@ -233,6 +233,20 @@ pre{{
         if (!r.Success)
             sb.Append($"<div class=\"err-box\"><strong>Analysis failed:</strong> {E(r.ErrorMessage ?? "Unknown error")}</div>\n");
 
+        // ── Content fetch warnings — surfaced prominently, since this is the #1 cause of
+        // "Changed Symbols" / "Code Snippets" looking empty or thin while Work Items still
+        // show rich data (work item fetch is a separate, unaffected API call). ──────────────
+        if (r.ContentFetchWarnings.Count > 0)
+        {
+            sb.Append("<div class=\"err-box\">\n");
+            sb.Append($"  <strong>⚠ {r.ContentFetchWarnings.Count} file(s) had content fetch issues.</strong> ");
+            sb.Append("Symbol extraction and code snippets for these files are degraded or empty as a result — the analysis below may be relying more heavily on work item context than actual code changes for these files:\n");
+            sb.Append("  <ul style=\"margin:8px 0 0 20px;\">\n");
+            foreach (var w in r.ContentFetchWarnings)
+                sb.Append($"    <li>{E(w)}</li>\n");
+            sb.Append("  </ul>\n</div>\n");
+        }
+
         // ── Pull Request section ──────────────────────────────────────────────────
         sb.Append("<div class=\"section-head\">Pull Request</div>\n");
         sb.Append("<div class=\"meta-grid\">\n");

@@ -4,5 +4,7 @@
   "devRepoPath": "",
   "azureDevOpsPat": null,
   "reportsBaseDir": "Reports",
-  "failOnImpact": false
+  "failOnImpact": false,
+  "testProjectPath": "C:\\source\\MyApp.Tests\\MyApp.Tests.csproj",
+  "testExecutionScope": "HighOnly"
 }

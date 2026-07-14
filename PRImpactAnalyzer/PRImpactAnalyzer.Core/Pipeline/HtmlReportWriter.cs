@@ -163,6 +163,9 @@ td{{padding:10px 12px;vertical-align:top;}}
 .badge-medium{{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bd);}}
 .badge-verify{{background:var(--grey-bg);color:var(--grey);border:1px solid var(--grey-bd);}}
 .badge-wi{{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);margin-left:6px;}}
+.badge-src-code{{background:rgba(63,185,80,.1);color:#7ee08a;border:1px solid rgba(63,185,80,.25);margin-left:6px;}}
+.badge-src-workitem{{background:rgba(210,153,34,.1);color:#e3b341;border:1px solid rgba(210,153,34,.25);margin-left:6px;}}
+.badge-src-tag{{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);margin-left:6px;}}
 
 /* ── Work items ───────────────────────────────────────────────────────── */
 .wi-card{{
@@ -285,6 +288,10 @@ pre{{
         }
 
         // ── Summary cards ─────────────────────────────────────────────────────────
+        int countCode      = sorted.Count(s => s.MatchSources.Contains("Code"));
+        int countWorkItem  = sorted.Count(s => s.MatchSources.Contains("WorkItem"));
+        int countWiTag     = sorted.Count(s => s.MatchSources.Contains("WorkItemTag"));
+
         sb.Append("<div class=\"section-head\">Summary</div>\n");
         sb.Append("<div class=\"summary-grid\">\n");
         sb.Append($"  <div class=\"stat-card stat-total\"><div class=\"lbl\">Impacted</div><div class=\"val\">{sorted.Count}</div></div>\n");
@@ -293,6 +300,14 @@ pre{{
         sb.Append($"  <div class=\"stat-card stat-verify\"><div class=\"lbl\">Verify</div><div class=\"val\">{countVerify}</div></div>\n");
         sb.Append($"  <div class=\"stat-card stat-neutral\"><div class=\"lbl\">Scanned</div><div class=\"val\">{r.AllScenarioCount}</div></div>\n");
         sb.Append($"  <div class=\"stat-card stat-neutral\"><div class=\"lbl\">Symbols</div><div class=\"val\">{r.ChangedSymbols.Count}</div></div>\n");
+        sb.Append("</div>\n");
+
+        sb.Append("<div class=\"section-head\">Impacted Scenarios — By Evidence Source</div>\n");
+        sb.Append("<div class=\"legend\">Every impacted scenario is identified by one or more of these three independent methods — a scenario can appear in more than one category:</div>\n");
+        sb.Append("<div class=\"summary-grid\">\n");
+        sb.Append($"  <div class=\"stat-card stat-high\"><div class=\"lbl\">From Code Changes</div><div class=\"val\">{countCode}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-medium\"><div class=\"lbl\">From Work Item Description</div><div class=\"val\">{countWorkItem}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-total\"><div class=\"lbl\">From Work Item Tag Match</div><div class=\"val\">{countWiTag}</div></div>\n");
         sb.Append("</div>\n");
 
         // ── Impacted scenarios ────────────────────────────────────────────────────
@@ -311,6 +326,12 @@ pre{{
     <li><span class=""badge badge-high"">HIGH</span> — scenario's bound code directly references a changed symbol.</li>
     <li><span class=""badge badge-medium"">MEDIUM</span> — same business behaviour but no direct code-level link.</li>
     <li><span class=""badge badge-verify"">VERIFY</span> — plausible match — manually confirm before relying on it.</li>
+  </ul>
+  <strong>Evidence source badges</strong> (a scenario can have more than one):
+  <ul>
+    <li><span class=""badge badge-src-code"">CODE</span> — matched via changed code symbols or diff snippets.</li>
+    <li><span class=""badge badge-src-workitem"">WI-DESC</span> — matched via a linked work item's description/repro steps text.</li>
+    <li><span class=""badge badge-src-tag"">WI-TAG #id</span> — deterministic: this scenario's Gherkin tag matches a work item linked to this PR. Always forced to HIGH.</li>
   </ul>
 </div>
 ");
@@ -340,13 +361,18 @@ pre{{
                 var reason = string.IsNullOrWhiteSpace(s.Reason)
                     ? "<span class=\"no-reason\">— no reason provided</span>"
                     : E(s.Reason);
-                var wiBadge = s.MatchedWorkItemIds.Count > 0
-                    ? $"<span class=\"badge badge-wi\">WI #{string.Join(", #", s.MatchedWorkItemIds)}</span>"
-                    : "";
+
+                var sourceBadges = new StringBuilder();
+                if (s.MatchSources.Contains("Code"))
+                    sourceBadges.Append("<span class=\"badge badge-src-code\">CODE</span>");
+                if (s.MatchSources.Contains("WorkItem"))
+                    sourceBadges.Append("<span class=\"badge badge-src-workitem\">WI-DESC</span>");
+                if (s.MatchSources.Contains("WorkItemTag") || s.MatchedWorkItemIds.Count > 0)
+                    sourceBadges.Append($"<span class=\"badge badge-src-tag\">WI-TAG #{string.Join(", #", s.MatchedWorkItemIds)}</span>");
 
                 sb.Append($@"<tr class=""{rc}"" data-conf=""{conf}"">
   <td class=""col-num"">{idx++}</td>
-  <td class=""col-scenario""><strong>{E(s.ScenarioName)}</strong>{wiBadge}</td>
+  <td class=""col-scenario""><strong>{E(s.ScenarioName)}</strong>{sourceBadges}</td>
   <td class=""col-file""><code>{E(s.FeatureFile)}</code></td>
   <td class=""col-match"">{E(s.MatchedChange)}</td>
   <td class=""col-conf""><span class=""badge {bdg}"">{conf}</span></td>

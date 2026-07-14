@@ -135,6 +135,13 @@ public class ImpactedScenario
     /// <summary>Non-null when this scenario was force-included/upgraded because it's tagged
     /// with a work item ID linked to this PR — a deterministic signal, not an LLM guess.</summary>
     public List<int> MatchedWorkItemIds { get; set; } = new();
+
+    /// <summary>Which evidence type(s) identified this scenario. Possible values: "Code"
+    /// (matched via changed symbols/code snippets), "WorkItem" (matched via linked work
+    /// item description/repro steps), "WorkItemTag" (deterministic — scenario's Gherkin tag
+    /// matches a linked work item ID). A scenario can have more than one — e.g. a scenario
+    /// tagged with the work item AND independently matched on code gets both.</summary>
+    public List<string> MatchSources { get; set; } = new();
 }
 
 public class AnalysisResult

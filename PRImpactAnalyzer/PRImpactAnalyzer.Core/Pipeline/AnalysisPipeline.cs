@@ -185,7 +185,16 @@ public class AnalysisPipeline
 
         var merged = allImpacted
             .GroupBy(s => (s.FeatureFile, s.ScenarioName))
-            .Select(g => g.OrderByDescending(s => s.Confidence).First())
+            .Select(g =>
+            {
+                // Keep the highest-confidence duplicate as the base, but union MatchSources
+                // across ALL duplicates for this scenario — otherwise a scenario matched by
+                // one chunk as "Code" and independently as "WorkItem" in another response
+                // would silently lose one of those sources when only the first is kept.
+                var best = g.OrderByDescending(s => s.Confidence).First();
+                best.MatchSources = g.SelectMany(s => s.MatchSources).Distinct().ToList();
+                return best;
+            })
             .ToDictionary(s => (s.FeatureFile, s.ScenarioName));
 
         // Task 1 backstop: force-include/upgrade every work-item-matched scenario to HIGH,
@@ -198,6 +207,8 @@ public class AnalysisPipeline
             {
                 existing.Confidence = ConfidenceLevel.High;
                 existing.MatchedWorkItemIds = wiScenario.MatchedWorkItemIds;
+                if (!existing.MatchSources.Contains("WorkItemTag"))
+                    existing.MatchSources.Add("WorkItemTag");
                 if (!existing.Reason.Contains("work item", StringComparison.OrdinalIgnoreCase))
                     existing.Reason = $"Linked to work item #{string.Join(", #", wiScenario.MatchedWorkItemIds)}. {existing.Reason}".Trim();
             }
@@ -211,6 +222,7 @@ public class AnalysisPipeline
                     Confidence    = ConfidenceLevel.High,
                     Reason        = $"Linked to work item #{string.Join(", #", wiScenario.MatchedWorkItemIds)} associated with this PR.",
                     MatchedWorkItemIds = wiScenario.MatchedWorkItemIds,
+                    MatchSources  = new List<string> { "WorkItemTag" },
                 };
             }
         }

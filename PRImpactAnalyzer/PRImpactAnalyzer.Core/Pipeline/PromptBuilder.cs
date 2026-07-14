@@ -22,8 +22,9 @@ public class PromptBuilder
         sb.AppendLine("Do NOT ask clarifying questions. Use ONLY the data below. Match on name/steps if bound refs are absent, rate M or V accordingly.");
         sb.AppendLine("Scenarios marked [WI-MATCH] are already confirmed HIGH via work item traceability — keep them H unless clearly wrong.");
         sb.AppendLine("Return ONLY this JSON, no prose, no markdown fences:");
-        sb.AppendLine("{\"impacted\":[{\"s\":\"<scenario name>\",\"f\":\"<feature file>\",\"m\":\"<matched change>\",\"c\":\"H|M|V\",\"r\":\"<reason <12 words>\"}]}");
+        sb.AppendLine("{\"impacted\":[{\"s\":\"<scenario name>\",\"f\":\"<feature file>\",\"m\":\"<matched change>\",\"c\":\"H|M|V\",\"e\":\"code|workitem|both\",\"r\":\"<reason <12 words>\"}]}");
         sb.AppendLine("c: H=direct symbol match, M=semantic/behavioral, V=plausible unconfirmed. Omit non-matches.");
+        sb.AppendLine("e: REQUIRED. 'code' if you matched this scenario primarily via CHANGED SYMBOLS/CODE CHANGE SNIPPETS. 'workitem' if you matched it primarily via a LINKED WORK ITEM's description/repro steps text (not its tag — that's handled separately). 'both' if genuinely both contributed.");
         sb.AppendLine();
 
         // ── PR metadata ───────────────────────────────────────────────────────

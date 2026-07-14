@@ -95,9 +95,27 @@ public class LlmResponseParser
                 FeatureFile   = i.ResolvedFeature    ?? string.Empty,
                 MatchedChange = i.ResolvedMatch       ?? string.Empty,
                 Confidence    = ParseConfidence(i.ResolvedConfidence),
-                Reason        = i.ResolvedReason     ?? string.Empty
+                Reason        = i.ResolvedReason     ?? string.Empty,
+                MatchSources  = ParseEvidenceSources(i.ResolvedEvidence),
             })
             .ToList();
+
+    /// <summary>
+    /// Maps the LLM's self-reported "e"/"evidence" field to MatchSources entries.
+    /// Defaults to ["Code"] if the field is missing entirely (older/non-compliant responses),
+    /// since code-based matching was always the primary, default evidence type.
+    /// </summary>
+    private static List<string> ParseEvidenceSources(string? evidence)
+    {
+        var normalized = evidence?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "code"     => new List<string> { "Code" },
+            "workitem" => new List<string> { "WorkItem" },
+            "both"     => new List<string> { "Code", "WorkItem" },
+            _          => new List<string> { "Code" }, // graceful default for older/malformed responses
+        };
+    }
 
     /// <summary>
     /// Extracts the first complete JSON object or array from text that may have
@@ -181,6 +199,7 @@ public class LlmResponseParser
         [JsonPropertyName("f")]            public string? F { get; set; }   // short: feature file
         [JsonPropertyName("m")]            public string? M { get; set; }   // short: matched change
         [JsonPropertyName("c")]            public string? C { get; set; }   // short: confidence
+        [JsonPropertyName("e")]            public string? Ev { get; set; }  // short: evidence source (code|workitem|both)
         [JsonPropertyName("r")]            public string? R { get; set; }   // short: reason
 
         // Long-key fallbacks — Copilot frequently uses these despite the prompt instruction
@@ -188,6 +207,7 @@ public class LlmResponseParser
         [JsonPropertyName("featureFile")]   public string? FeatureFile   { get; set; }
         [JsonPropertyName("matchedChange")] public string? MatchedChange { get; set; }
         [JsonPropertyName("confidence")]    public string? Confidence    { get; set; }
+        [JsonPropertyName("evidence")]      public string? Evidence      { get; set; }
         [JsonPropertyName("reason")]        public string? Reason        { get; set; }
 
         // Convenience getters — prefer short key if present, fall back to long key
@@ -195,6 +215,7 @@ public class LlmResponseParser
         [JsonIgnore] public string? ResolvedFeature    => F ?? FeatureFile;
         [JsonIgnore] public string? ResolvedMatch      => M ?? MatchedChange;
         [JsonIgnore] public string? ResolvedConfidence => C ?? Confidence;
+        [JsonIgnore] public string? ResolvedEvidence    => Ev ?? Evidence;
         [JsonIgnore] public string? ResolvedReason     => R ?? Reason;
     }
 }

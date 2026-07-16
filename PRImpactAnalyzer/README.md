@@ -46,6 +46,15 @@ Controlled by `testExecutionScope` in config:
 Requires `testProjectPath` in config — the `.csproj` (or built `.dll`) of your Selenium/
 Reqnroll/NUnit test project.
 
+**Build your test project first.** `execute` runs `dotnet test --no-build` — it does NOT
+build your test project itself. Build it normally in Visual Studio (or via classic
+`MSBuild.exe`) before running `execute`. This is intentional: if your test project (or any
+of its dependencies) has a `<COMReference>` — common in older Selenium/automation projects —
+the modern .NET SDK's MSBuild (which `dotnet build`/`dotnet test` uses by default) cannot
+resolve it and fails with `"The task 'ResolveComReference' is not supported on the .NET Core
+version of MSBuild."` Classic MSBuild.exe (bundled with Visual Studio) handles COM references
+fine, so building there first and skipping the build in `execute` sidesteps this entirely.
+
 **How matching works:** Reqnroll generates one NUnit test method per scenario, named from
 the scenario title. `execute` builds a `dotnet test --filter "FullyQualifiedName~..."`
 expression per scenario using the `~` (contains) operator — tolerant of minor naming

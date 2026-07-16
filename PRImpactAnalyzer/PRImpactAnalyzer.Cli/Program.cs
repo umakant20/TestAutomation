@@ -212,14 +212,22 @@ static async Task<int> RunExecuteAsync(PrImpactConfig config)
     var filterExpression = string.Join("|", filterTerms);
 
     Console.WriteLine();
-    Console.WriteLine("Running:");
-    Console.WriteLine($"  dotnet test \"{config.TestProjectPath}\" --filter \"{filterExpression}\"");
+    Console.WriteLine("Running (assumes the test project is already built — e.g. via Visual Studio):");
+    Console.WriteLine($"  dotnet test \"{config.TestProjectPath}\" --filter \"{filterExpression}\" --no-build");
     Console.WriteLine();
 
     var psi = new ProcessStartInfo
     {
         FileName = "dotnet",
-        Arguments = $"test \"{config.TestProjectPath}\" --filter \"{filterExpression}\"",
+        // --no-build is essential: it skips MSBuild's Build target chain entirely, which is
+        // what invokes tasks like ResolveComReference. That task only exists in classic
+        // MSBuild.exe (the one bundled with Visual Studio) — the modern .NET SDK's MSBuild
+        // used by `dotnet build`/`dotnet test` doesn't implement it at all, and fails hard
+        // if the test project (or a dependency) has any <COMReference> items. Skipping the
+        // build avoids this entirely — but means the test project MUST already be built
+        // (e.g. via Visual Studio, which uses classic MSBuild and handles COM references
+        // fine) before running 'execute'.
+        Arguments = $"test \"{config.TestProjectPath}\" --filter \"{filterExpression}\" --no-build",
         UseShellExecute = false,
         RedirectStandardOutput = false,
         RedirectStandardError = false,

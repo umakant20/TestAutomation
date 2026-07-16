@@ -1,0 +1,16 @@
+{
+  "stagesToSkip": [],
+  "resources": {
+    "repositories": {
+      "self": { "refName": "refs/heads/master" }
+    }
+  },
+  "templateParameters": {
+    "EnvironmentToTest": "Test",
+    "PublishReportInPowerBI": "true",
+    "SecurityScan": "false",
+    "AgentPoolName": "Pool",
+    "TestNames": "{{SCENARIO_NAMES_BULLET_LIST}}"
+  },
+  "variables": {}
+}

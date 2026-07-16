@@ -5,6 +5,12 @@
   "azureDevOpsPat": null,
   "reportsBaseDir": "Reports",
   "failOnImpact": false,
+
   "testProjectPath": "C:\\source\\MyApp.Tests\\MyApp.Tests.csproj",
-  "testExecutionScope": "HighOnly"
+  "testExecutionScope": "HighOnly",
+
+  "pipelineOrgUrl": "https://dev.azure.com/yourorg",
+  "pipelineProject": "yourproject",
+  "pipelineId": 123,
+  "pipelineRequestBodyTemplateFile": "pipeline-request-template.json"
 }

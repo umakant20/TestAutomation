@@ -1,0 +1,10 @@
+{
+  "resources": {
+    "repositories": {
+      "self": { "refName": "refs/heads/main" }
+    }
+  },
+  "templateParameters": {
+    "testFilter": "{{TEST_FILTER}}"
+  }
+}

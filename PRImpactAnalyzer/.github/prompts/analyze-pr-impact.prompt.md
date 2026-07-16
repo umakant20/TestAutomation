@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: Run the PR Test Impact Analyzer end-to-end for a given PR number, then execute the impacted tests
+description: Run the PR Test Impact Analyzer end-to-end for a given PR number, then trigger the impacted tests in Azure DevOps
 ---
 
 Run this multi-step task fully — every step is a real terminal/file action, not a chat reply.
@@ -20,8 +20,9 @@ Do not stop until Step 6 is delivered. No clarifying questions.
 5. [run] `dotnet run --project ./PRImpactAnalyzer.Cli/PRImpactAnalyzer.Cli.csproj -- report pr-impact-config.json`
    Report: impacted count, HIGH/MEDIUM/VERIFY breakdown, and the report file path.
 
-6. [run] `dotnet run --project ./PRImpactAnalyzer.Cli/PRImpactAnalyzer.Cli.csproj -- execute pr-impact-config.json`
-   This runs exactly the impacted scenarios (scoped by testExecutionScope in the config)
-   against the Selenium/Reqnroll/NUnit test project. Report the pass/fail summary.
+6. [run] `dotnet run --project ./PRImpactAnalyzer.Cli/PRImpactAnalyzer.Cli.csproj -- trigger-pipeline pr-impact-config.json`
+   This calls the Azure DevOps Pipelines REST API to trigger a remote pipeline run, passing
+   the impacted scenarios (scoped by testExecutionScope in the config) as a filter parameter.
+   Report the pipeline run ID and URL it prints.
 
 Analyze PR #${input:prId}.

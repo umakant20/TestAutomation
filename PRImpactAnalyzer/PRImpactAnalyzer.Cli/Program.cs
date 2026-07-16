@@ -8,15 +8,18 @@ using PRImpactAnalyzer.Infrastructure;
 
 // PR Test Impact Analyzer CLI
 // Usage:
-//   pr-impact prepare [config.json] [prId]   (prId optional — see below)
-//   pr-impact report  [config.json]
-//   pr-impact execute [config.json]
+//   pr-impact prepare         [config.json] [prId]   (prId optional — see below)
+//   pr-impact report          [config.json]
+//   pr-impact execute         [config.json]           (runs tests locally via dotnet test)
+//   pr-impact trigger-pipeline [config.json]           (triggers an ADO pipeline run instead)
 //
 // Every "prepare" run creates its own dated folder under Reports/{prId}_{timestamp}/
 // containing prompt.txt and state.json. "report" auto-finds the latest run, writes the HTML
 // report AND a small impacted-tests.json manifest into that same folder. "execute" reads
 // that manifest, filters by confidence per config's testExecutionScope, and runs exactly
 // those scenarios via `dotnet test --filter` against your Selenium/Reqnroll/NUnit test project.
+// "trigger-pipeline" does the same filtering but instead calls the Azure DevOps Pipelines
+// REST API to kick off a pipeline run remotely, passing the filter as a pipeline parameter.
 
 if (args.Length == 0 || args[0] is "--help" or "-h") { PrintUsage(); return args.Length == 0 ? 1 : 0; }
 
@@ -38,13 +41,14 @@ var config = JsonSerializer.Deserialize<PrImpactConfig>(
 
 return command switch
 {
-    "prepare" => await RunPrepareAsync(config, explicitPrId),
-    "report"  => await RunReportAsync(config),
-    "execute" => await RunExecuteAsync(config),
-    _         => Unknown(command)
+    "prepare"          => await RunPrepareAsync(config, explicitPrId),
+    "report"           => await RunReportAsync(config),
+    "execute"          => await RunExecuteAsync(config),
+    "trigger-pipeline" => await RunTriggerPipelineAsync(config),
+    _                  => Unknown(command)
 };
 
-static int Unknown(string cmd) { Console.Error.WriteLine($"Unknown command '{cmd}'. Expected 'prepare', 'report', or 'execute'."); PrintUsage(); return 1; }
+static int Unknown(string cmd) { Console.Error.WriteLine($"Unknown command '{cmd}'. Expected 'prepare', 'report', 'execute', or 'trigger-pipeline'."); PrintUsage(); return 1; }
 
 static async Task<int> RunPrepareAsync(PrImpactConfig config, string? explicitPrId)
 {
@@ -153,63 +157,19 @@ static async Task<int> RunReportAsync(PrImpactConfig config)
 
 static async Task<int> RunExecuteAsync(PrImpactConfig config)
 {
-    var reportsBaseDir = config.ReportsBaseDir ?? "Reports";
-    var pointer = PrImpactAnalyzerFacade.ReadCurrentRunPointer(reportsBaseDir);
+    var (manifest, toRun, error) = await LoadScopedManifestAsync(config);
+    if (error is not null) { Console.Error.WriteLine(error); return 1; }
 
-    if (pointer is null)
-    { Console.Error.WriteLine($"ERROR: no run found under '{Path.GetFullPath(reportsBaseDir)}'. Run 'prepare' then 'report' first."); return 1; }
+    Console.WriteLine();
+    Console.WriteLine($"Test execution scope: {config.TestExecutionScope ?? "HighOnly"}");
+    Console.WriteLine($"Scenarios selected   : {toRun!.Count} of {manifest!.Scenarios.Count} impacted");
 
-    var manifestPath = Path.Combine(pointer.RunFolder, "impacted-tests.json");
-    if (!File.Exists(manifestPath))
-    { Console.Error.WriteLine($"ERROR: manifest not found at '{Path.GetFullPath(manifestPath)}'. Run 'report' first."); return 1; }
+    if (toRun.Count == 0) { Console.WriteLine("Nothing to run at this scope."); return 0; }
 
     if (string.IsNullOrWhiteSpace(config.TestProjectPath))
     { Console.Error.WriteLine("ERROR: config is missing 'testProjectPath' — path to your Selenium/Reqnroll/NUnit test project (.csproj) or its built .dll."); return 1; }
 
-    var manifest = JsonSerializer.Deserialize<ImpactedTestsManifest>(
-        await File.ReadAllTextAsync(manifestPath),
-        new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-        ?? throw new InvalidOperationException("Could not parse impacted-tests.json.");
-
-    // ── Confidence scope filter ─────────────────────────────────────────────
-    // "HighOnly"       -> only HIGH confidence scenarios run
-    // "HighAndMedium"  -> HIGH + MEDIUM
-    // "All"            -> HIGH + MEDIUM + VERIFY (everything in the report)
-    var scope = (config.TestExecutionScope ?? "HighOnly").Trim();
-    var allowedConfidences = scope switch
-    {
-        "All"           => new HashSet<string> { "High", "Medium", "Verify" },
-        "HighAndMedium" => new HashSet<string> { "High", "Medium" },
-        "HighOnly"      => new HashSet<string> { "High" },
-        _ => throw new InvalidOperationException(
-            $"Unknown testExecutionScope '{scope}'. Valid values: HighOnly, HighAndMedium, All.")
-    };
-
-    var toRun = manifest.Scenarios.Where(s => allowedConfidences.Contains(s.Confidence)).ToList();
-
-    Console.WriteLine();
-    Console.WriteLine($"Test execution scope: {scope}  ({string.Join("+", allowedConfidences)})");
-    Console.WriteLine($"Scenarios selected   : {toRun.Count} of {manifest.Scenarios.Count} impacted");
-
-    if (toRun.Count == 0)
-    {
-        Console.WriteLine("Nothing to run at this scope.");
-        return 0;
-    }
-
-    // ── Build the dotnet test filter ────────────────────────────────────────
-    // Reqnroll/SpecFlow generates one NUnit test method per scenario, named from the
-    // scenario title with non-alphanumeric characters replaced. We sanitize the same way
-    // and use the "~" (contains) operator rather than exact match, since generated names
-    // can carry small suffixes (e.g. Scenario Outline example indices) that exact matching
-    // would miss.
-    var filterTerms = toRun
-        .Select(s => SanitizeForTestNameFilter(s.ScenarioName))
-        .Where(s => !string.IsNullOrWhiteSpace(s))
-        .Distinct()
-        .Select(s => $"FullyQualifiedName~{s}");
-
-    var filterExpression = string.Join("|", filterTerms);
+    var filterExpression = BuildTestFilterExpression(toRun);
 
     Console.WriteLine();
     Console.WriteLine("Running (assumes the test project is already built — e.g. via Visual Studio):");
@@ -242,6 +202,159 @@ static async Task<int> RunExecuteAsync(PrImpactConfig config)
     return process.ExitCode;
 }
 
+static async Task<int> RunTriggerPipelineAsync(PrImpactConfig config)
+{
+    var (manifest, toRun, error) = await LoadScopedManifestAsync(config);
+    if (error is not null) { Console.Error.WriteLine(error); return 1; }
+
+    Console.WriteLine();
+    Console.WriteLine($"Test execution scope: {config.TestExecutionScope ?? "HighOnly"}");
+    Console.WriteLine($"Scenarios selected   : {toRun!.Count} of {manifest!.Scenarios.Count} impacted");
+
+    if (toRun.Count == 0) { Console.WriteLine("Nothing to trigger at this scope."); return 0; }
+
+    if (string.IsNullOrWhiteSpace(config.PipelineOrgUrl) || string.IsNullOrWhiteSpace(config.PipelineProject) || config.PipelineId is null)
+    {
+        Console.Error.WriteLine("ERROR: config is missing 'pipelineOrgUrl', 'pipelineProject', or 'pipelineId'.");
+        return 1;
+    }
+
+    if (string.IsNullOrWhiteSpace(config.PipelineRequestBodyTemplateFile))
+    {
+        Console.Error.WriteLine("ERROR: config is missing 'pipelineRequestBodyTemplateFile'.");
+        Console.Error.WriteLine("Create a JSON file containing your already-working pipeline trigger request body,");
+        Console.Error.WriteLine("with placeholder tokens where the identified test scenarios should go. See README.");
+        return 1;
+    }
+
+    var templatePath = config.PipelineRequestBodyTemplateFile!;
+    if (!File.Exists(templatePath))
+    { Console.Error.WriteLine($"ERROR: template file not found at '{Path.GetFullPath(templatePath)}'."); return 1; }
+
+    var pat = config.AzureDevOpsPat ?? Environment.GetEnvironmentVariable("ADO_PAT");
+    if (string.IsNullOrWhiteSpace(pat))
+    { Console.Error.WriteLine("ERROR: No Azure DevOps PAT. Set 'azureDevOpsPat' in config or the ADO_PAT env var."); return 1; }
+
+    // ── Build every substitution value the template might reference ─────────
+    var filterExpression = BuildTestFilterExpression(toRun);
+    var scenarioNamesCsv = string.Join(", ", toRun.Select(s => s.ScenarioName).Distinct());
+    var scenarioNamesJsonArray = JsonSerializer.Serialize(toRun.Select(s => s.ScenarioName).Distinct().ToList());
+    var featureFilesCsv = string.Join(", ", toRun.Select(s => s.FeatureFile).Distinct());
+
+    // Dash-bulleted, newline-separated list — e.g. "- Workflow01\n- Workflow02\n- Workflow03\n".
+    // Matches pipelines that expect a YAML-list-shaped string for a parameter like "TestNames"
+    // rather than a comma-separated list or a dotnet-test filter expression.
+    var distinctNames = toRun.Select(s => s.ScenarioName).Distinct().ToList();
+    var scenarioNamesBulletList = distinctNames.Count == 0
+        ? string.Empty
+        : string.Join("\n", distinctNames.Select(n => $"- {n}")) + "\n";
+
+    // ── Load the user's own request body template and substitute tokens ─────
+    // The template is THEIR already-validated working request body (e.g. copied from
+    // Postman or a curl command they've already tested), untouched otherwise — we only
+    // replace these specific placeholder tokens wherever they appear in it. This means
+    // zero assumptions about parameter names, zero YAML changes, and the exact payload
+    // shape stays entirely under the caller's control.
+    var templateText = await File.ReadAllTextAsync(templatePath);
+    var body = templateText
+        .Replace("{{TEST_FILTER}}", JsonEscape(filterExpression))
+        .Replace("{{SCENARIO_NAMES_CSV}}", JsonEscape(scenarioNamesCsv))
+        .Replace("{{SCENARIO_NAMES_JSON_ARRAY}}", scenarioNamesJsonArray)
+        .Replace("{{SCENARIO_NAMES_BULLET_LIST}}", JsonEscape(scenarioNamesBulletList))
+        .Replace("{{FEATURE_FILES_CSV}}", JsonEscape(featureFilesCsv))
+        .Replace("{{PR_ID}}", manifest.PrId.ToString())
+        .Replace("{{SCENARIO_COUNT}}", toRun.Count.ToString());
+
+    // Validate the substituted result is still well-formed JSON before sending — catches a
+    // bad template (e.g. a token placed outside quotes) with a clear local error instead of
+    // a confusing 400 from Azure DevOps.
+    try
+    {
+        JsonDocument.Parse(body);
+    }
+    catch (JsonException ex)
+    {
+        Console.Error.WriteLine($"ERROR: after substituting tokens, the request body is not valid JSON: {ex.Message}");
+        Console.Error.WriteLine("Check that every {{TOKEN}} in your template sits inside a JSON string value (in quotes),");
+        Console.Error.WriteLine("except {{SCENARIO_NAMES_JSON_ARRAY}} which itself expands to a JSON array and should NOT be quoted.");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Substituted body was:");
+        Console.Error.WriteLine(body);
+        return 1;
+    }
+
+    var url = $"{config.PipelineOrgUrl!.TrimEnd('/')}/{config.PipelineProject}/_apis/pipelines/{config.PipelineId}/runs?api-version=7.0";
+
+    using var http = new HttpClient();
+    var authToken = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($":{pat}"));
+    http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+
+    Console.WriteLine();
+    Console.WriteLine($"Triggering pipeline {config.PipelineId} in {config.PipelineProject}...");
+    Console.WriteLine($"Test filter substituted: {filterExpression}");
+    Console.WriteLine();
+    Console.WriteLine("Request body sent:");
+    Console.WriteLine(body);
+
+    var response = await http.PostAsync(url, new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+    var responseText = await response.Content.ReadAsStringAsync();
+
+    if (!response.IsSuccessStatusCode)
+    {
+        Console.Error.WriteLine();
+        Console.Error.WriteLine($"ERROR: pipeline trigger failed — HTTP {(int)response.StatusCode}");
+        Console.Error.WriteLine(responseText);
+        return 1;
+    }
+
+    using var doc = JsonDocument.Parse(responseText);
+    var runId  = doc.RootElement.TryGetProperty("id", out var idProp) ? idProp.GetInt32().ToString() : "?";
+    var runUrl = doc.RootElement.TryGetProperty("_links", out var links) &&
+                 links.TryGetProperty("web", out var web) &&
+                 web.TryGetProperty("href", out var href) ? href.GetString() : null;
+
+    Console.WriteLine();
+    Console.WriteLine($"Pipeline run started: ID {runId}");
+    if (runUrl is not null) Console.WriteLine($"  {runUrl}");
+    return 0;
+}
+
+/// <summary>Escapes a plain string for safe insertion as the CONTENT of a JSON string value
+/// (i.e. it does not add the surrounding quotes — the template already has those).</summary>
+static string JsonEscape(string text) =>
+    JsonSerializer.Serialize(text)[1..^1]; // Serialize gives "..."; strip the outer quotes
+
+/// <summary>Shared by 'execute' and 'trigger-pipeline': loads the manifest and applies the
+/// confidence-scope filter from config's testExecutionScope.</summary>
+static async Task<(ImpactedTestsManifest? Manifest, List<ImpactedTestEntry>? Scoped, string? Error)> LoadScopedManifestAsync(PrImpactConfig config)
+{
+    var reportsBaseDir = config.ReportsBaseDir ?? "Reports";
+    var pointer = PrImpactAnalyzerFacade.ReadCurrentRunPointer(reportsBaseDir);
+    if (pointer is null)
+        return (null, null, $"ERROR: no run found under '{Path.GetFullPath(reportsBaseDir)}'. Run 'prepare' then 'report' first.");
+
+    var manifestPath = Path.Combine(pointer.RunFolder, "impacted-tests.json");
+    if (!File.Exists(manifestPath))
+        return (null, null, $"ERROR: manifest not found at '{Path.GetFullPath(manifestPath)}'. Run 'report' first.");
+
+    var manifest = JsonSerializer.Deserialize<ImpactedTestsManifest>(
+        await File.ReadAllTextAsync(manifestPath),
+        new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        ?? throw new InvalidOperationException("Could not parse impacted-tests.json.");
+
+    var scope = (config.TestExecutionScope ?? "HighOnly").Trim();
+    var allowedConfidences = scope switch
+    {
+        "All"           => new HashSet<string> { "High", "Medium", "Verify" },
+        "HighAndMedium" => new HashSet<string> { "High", "Medium" },
+        "HighOnly"      => new HashSet<string> { "High" },
+        _ => throw new InvalidOperationException($"Unknown testExecutionScope '{scope}'. Valid values: HighOnly, HighAndMedium, All.")
+    };
+
+    var toRun = manifest.Scenarios.Where(s => allowedConfidences.Contains(s.Confidence)).ToList();
+    return (manifest, toRun, null);
+}
+
 /// <summary>
 /// Approximates Reqnroll/SpecFlow's generated NUnit test method naming: non-alphanumeric
 /// characters become underscores, consecutive underscores collapse to one. Not a guaranteed
@@ -249,6 +362,17 @@ static async Task<int> RunExecuteAsync(PrImpactConfig config)
 /// filter uses "~" (contains) rather than "=" (exact) — a close approximation is enough to
 /// find the right generated test name inside FullyQualifiedName.
 /// </summary>
+static string BuildTestFilterExpression(List<ImpactedTestEntry> scenarios)
+{
+    var filterTerms = scenarios
+        .Select(s => SanitizeForTestNameFilter(s.ScenarioName))
+        .Where(s => !string.IsNullOrWhiteSpace(s))
+        .Distinct()
+        .Select(s => $"FullyQualifiedName~{s}");
+
+    return string.Join("|", filterTerms);
+}
+
 static string SanitizeForTestNameFilter(string scenarioName)
 {
     var chars = scenarioName.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray();
@@ -259,14 +383,14 @@ static string SanitizeForTestNameFilter(string scenarioName)
 
 static void PrintUsage() => Console.WriteLine(@"
 Usage:
-  pr-impact prepare [config.json] [prId]
-  pr-impact report  [config.json]
-  pr-impact execute [config.json]
+  pr-impact prepare          [config.json] [prId]
+  pr-impact report           [config.json]
+  pr-impact execute          [config.json]   (runs impacted tests locally via dotnet test)
+  pr-impact trigger-pipeline [config.json]   (triggers an Azure DevOps pipeline run instead)
 
 Each prepare run creates Reports/{prId}_{timestamp}/ with prompt.txt + state.json.
 report auto-finds the latest run, writes the HTML report AND impacted-tests.json.
-execute reads that manifest and runs exactly the impacted scenarios via
-`dotnet test --filter`, scoped by config's testExecutionScope:
+Both execute and trigger-pipeline filter that manifest by config's testExecutionScope:
   HighOnly       - only HIGH confidence scenarios (default, safest)
   HighAndMedium  - HIGH + MEDIUM
   All            - everything in the report, including VERIFY
@@ -286,9 +410,26 @@ public class PrImpactConfig
     /// passed straight to `dotnet test`.</summary>
     [JsonPropertyName("testProjectPath")]     public string? TestProjectPath     { get; set; }
 
-    /// <summary>Which confidence tiers to include when running 'execute':
+    /// <summary>Which confidence tiers to include when running 'execute'/'trigger-pipeline':
     /// "HighOnly" (default), "HighAndMedium", or "All".</summary>
     [JsonPropertyName("testExecutionScope")]  public string? TestExecutionScope  { get; set; }
+
+    // ── trigger-pipeline settings ──────────────────────────────────────────────
+    /// <summary>Azure DevOps org URL, e.g. https://dev.azure.com/yourorg — for triggering
+    /// a pipeline run remotely instead of running tests locally via 'execute'.</summary>
+    [JsonPropertyName("pipelineOrgUrl")]      public string? PipelineOrgUrl      { get; set; }
+    [JsonPropertyName("pipelineProject")]     public string? PipelineProject     { get; set; }
+    /// <summary>Numeric ID of the pipeline definition to trigger.</summary>
+    [JsonPropertyName("pipelineId")]          public int?    PipelineId          { get; set; }
+
+    /// <summary>Path to a JSON file containing YOUR OWN already-working pipeline trigger
+    /// request body (e.g. copied from Postman/curl), with placeholder tokens where the
+    /// dynamically-identified test scenarios should be substituted in. No pipeline YAML
+    /// changes needed — the exact payload shape stays entirely under your control.
+    /// Supported tokens: {{TEST_FILTER}}, {{SCENARIO_NAMES_CSV}}, {{SCENARIO_NAMES_JSON_ARRAY}},
+    /// {{SCENARIO_NAMES_BULLET_LIST}}, {{FEATURE_FILES_CSV}}, {{PR_ID}}, {{SCENARIO_COUNT}}.
+    /// See README for examples.</summary>
+    [JsonPropertyName("pipelineRequestBodyTemplateFile")] public string? PipelineRequestBodyTemplateFile { get; set; }
 }
 
 public class ImpactedTestsManifest

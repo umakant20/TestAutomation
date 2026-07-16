@@ -62,6 +62,70 @@ variations, but not a byte-exact guarantee for every possible scenario title (Sc
 Outline examples in particular can get suffixed differently). Spot-check the filtered test
 count against what you expect on first use with a given test project.
 
+## Triggering an Azure DevOps pipeline instead of local execution
+
+If you already have a pipeline set up and a request body you've already validated works
+(e.g. tested via Postman or curl), `trigger-pipeline` uses that EXACT body — no pipeline
+YAML changes needed. You supply it as a template file with placeholder tokens; our code
+substitutes the dynamically-identified impacted scenarios into it before sending.
+
+**Step 1 — Copy your already-working request body into a template file.**
+
+Create `pipeline-request-template.json` (path referenced by `pipelineRequestBodyTemplateFile`
+in config) containing your exact known-working body, with tokens wherever the test list
+should go. Example — adjust the key names to match whatever YOUR pipeline already expects:
+
+```json
+{
+  "resources": {
+    "repositories": {
+      "self": { "refName": "refs/heads/main" }
+    }
+  },
+  "templateParameters": {
+    "testFilter": "{{TEST_FILTER}}"
+  }
+}
+```
+
+Two example templates are included:
+- `pipeline-request-template.sample.json` — minimal example using `{{TEST_FILTER}}`
+- `pipeline-request-template.bullet-list-example.json` — matches a payload shape with
+  `stagesToSkip`, `templateParameters` (`EnvironmentToTest`, `TestNames`, etc.), and `variables`
+  — using `{{SCENARIO_NAMES_BULLET_LIST}}` for a `TestNames` field expecting one scenario name
+  per line, dash-prefixed
+
+Copy whichever fits closer, rename to `pipeline-request-template.json`, and edit the key names
+to match your pipeline's actual parameters/variables (whatever you already use today — we
+don't assume any particular shape).
+
+**Available tokens** (use whichever fit your existing body's structure):
+
+| Token | Expands to |
+|---|---|
+| `{{TEST_FILTER}}` | `dotnet test --filter` expression, e.g. `FullyQualifiedName~Scenario1|FullyQualifiedName~Scenario2` — put inside a quoted JSON string |
+| `{{SCENARIO_NAMES_CSV}}` | Comma-separated scenario names as plain text — put inside a quoted JSON string |
+| `{{SCENARIO_NAMES_JSON_ARRAY}}` | A real JSON array literal, e.g. `["Scenario1","Scenario2"]` — do NOT wrap in quotes, it expands to the array itself |
+| `{{SCENARIO_NAMES_BULLET_LIST}}` | Dash-bulleted, newline-separated list, e.g. `"- Scenario1\n- Scenario2\n"` — put inside a quoted JSON string. Matches pipelines expecting a YAML-list-shaped string parameter (e.g. a `TestNames` field parsed as one name per line) |
+| `{{FEATURE_FILES_CSV}}` | Comma-separated feature file paths — put inside a quoted JSON string |
+| `{{PR_ID}}` | The PR number — put inside or outside quotes depending on whether your field is a string or number |
+| `{{SCENARIO_COUNT}}` | Count of scenarios being triggered |
+
+**Step 2 — Config fields required:**
+
+| Field | Purpose |
+|---|---|
+| `pipelineOrgUrl` | e.g. `https://dev.azure.com/yourorg` |
+| `pipelineProject` | Project name containing the pipeline |
+| `pipelineId` | Numeric ID of the pipeline (visible in its URL: `.../_build?definitionId=123`) |
+| `pipelineRequestBodyTemplateFile` | Path to your template file from Step 1 |
+
+`trigger-pipeline` reads the template, substitutes tokens, validates the result is still
+well-formed JSON (catching a misplaced token locally instead of a confusing error from Azure
+DevOps), then POSTs it to `{pipelineOrgUrl}/{pipelineProject}/_apis/pipelines/{pipelineId}/runs`
+using your existing `azureDevOpsPat`. It prints the exact substituted body before sending, so
+you can see precisely what went out.
+
 ## Config reference (`pr-impact-config.json`)
 
 | Field | Required | Purpose |
@@ -75,6 +139,8 @@ count against what you expect on first use with a given test project.
 | `failOnImpact` | No | `report` exits code 2 if any scenario impacted (CI gate) |
 | `testProjectPath` | Yes, for `execute` | Path to your test `.csproj` or `.dll` |
 | `testExecutionScope` | No | `HighOnly` (default) / `HighAndMedium` / `All` |
+| `pipelineOrgUrl` / `pipelineProject` / `pipelineId` | Yes, for `trigger-pipeline` | Identify which Azure DevOps pipeline to trigger |
+| `pipelineRequestBodyTemplateFile` | Yes, for `trigger-pipeline` | Path to your own working request body template with placeholder tokens |
 
 ## Project structure
 

@@ -241,9 +241,20 @@ static async Task<int> RunTriggerPipelineAsync(PrImpactConfig config)
     var scenarioNamesJsonArray = JsonSerializer.Serialize(toRun.Select(s => s.ScenarioName).Distinct().ToList());
     var featureFilesCsv = string.Join(", ", toRun.Select(s => s.FeatureFile).Distinct());
 
-    // Dash-bulleted, newline-separated list — e.g. "- Workflow01\n- Workflow02\n- Workflow03\n".
-    // Matches pipelines that expect a YAML-list-shaped string for a parameter like "TestNames"
-    // rather than a comma-separated list or a dotnet-test filter expression.
+    // Feature FILE NAMES (not scenario names, not full paths) — deduplicated, since one
+    // feature file commonly contains several impacted scenarios and most pipelines/test
+    // runners execute at the feature-file level, not the individual-scenario level.
+    var distinctFeatureNames = toRun
+        .Select(s => string.IsNullOrWhiteSpace(s.FeatureFile) ? s.FeatureFile : Path.GetFileName(s.FeatureFile))
+        .Where(n => !string.IsNullOrWhiteSpace(n))
+        .Distinct()
+        .ToList();
+    var featureNamesCsv = string.Join(", ", distinctFeatureNames);
+    var featureNamesJsonArray = JsonSerializer.Serialize(distinctFeatureNames);
+    var featureNamesBulletList = distinctFeatureNames.Count == 0
+        ? string.Empty
+        : string.Join("\n", distinctFeatureNames.Select(n => $"- {n}")) + "\n";
+
     var distinctNames = toRun.Select(s => s.ScenarioName).Distinct().ToList();
     var scenarioNamesBulletList = distinctNames.Count == 0
         ? string.Empty
@@ -261,6 +272,9 @@ static async Task<int> RunTriggerPipelineAsync(PrImpactConfig config)
         .Replace("{{SCENARIO_NAMES_CSV}}", JsonEscape(scenarioNamesCsv))
         .Replace("{{SCENARIO_NAMES_JSON_ARRAY}}", scenarioNamesJsonArray)
         .Replace("{{SCENARIO_NAMES_BULLET_LIST}}", JsonEscape(scenarioNamesBulletList))
+        .Replace("{{FEATURE_NAMES_CSV}}", JsonEscape(featureNamesCsv))
+        .Replace("{{FEATURE_NAMES_JSON_ARRAY}}", featureNamesJsonArray)
+        .Replace("{{FEATURE_NAMES_BULLET_LIST}}", JsonEscape(featureNamesBulletList))
         .Replace("{{FEATURE_FILES_CSV}}", JsonEscape(featureFilesCsv))
         .Replace("{{PR_ID}}", manifest.PrId.ToString())
         .Replace("{{SCENARIO_COUNT}}", toRun.Count.ToString());
@@ -427,7 +441,8 @@ public class PrImpactConfig
     /// dynamically-identified test scenarios should be substituted in. No pipeline YAML
     /// changes needed — the exact payload shape stays entirely under your control.
     /// Supported tokens: {{TEST_FILTER}}, {{SCENARIO_NAMES_CSV}}, {{SCENARIO_NAMES_JSON_ARRAY}},
-    /// {{SCENARIO_NAMES_BULLET_LIST}}, {{FEATURE_FILES_CSV}}, {{PR_ID}}, {{SCENARIO_COUNT}}.
+    /// {{SCENARIO_NAMES_BULLET_LIST}}, {{FEATURE_NAMES_CSV}}, {{FEATURE_NAMES_JSON_ARRAY}},
+    /// {{FEATURE_NAMES_BULLET_LIST}}, {{FEATURE_FILES_CSV}}, {{PR_ID}}, {{SCENARIO_COUNT}}.
     /// See README for examples.</summary>
     [JsonPropertyName("pipelineRequestBodyTemplateFile")] public string? PipelineRequestBodyTemplateFile { get; set; }
 }

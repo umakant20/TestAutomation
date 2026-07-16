@@ -92,8 +92,8 @@ Two example templates are included:
 - `pipeline-request-template.sample.json` — minimal example using `{{TEST_FILTER}}`
 - `pipeline-request-template.bullet-list-example.json` — matches a payload shape with
   `stagesToSkip`, `templateParameters` (`EnvironmentToTest`, `TestNames`, etc.), and `variables`
-  — using `{{SCENARIO_NAMES_BULLET_LIST}}` for a `TestNames` field expecting one scenario name
-  per line, dash-prefixed
+  — using `{{FEATURE_NAMES_BULLET_LIST}}` for a `TestNames` field expecting one **feature file
+  name** per line, dash-prefixed
 
 Copy whichever fits closer, rename to `pipeline-request-template.json`, and edit the key names
 to match your pipeline's actual parameters/variables (whatever you already use today — we
@@ -107,6 +107,9 @@ don't assume any particular shape).
 | `{{SCENARIO_NAMES_CSV}}` | Comma-separated scenario names as plain text — put inside a quoted JSON string |
 | `{{SCENARIO_NAMES_JSON_ARRAY}}` | A real JSON array literal, e.g. `["Scenario1","Scenario2"]` — do NOT wrap in quotes, it expands to the array itself |
 | `{{SCENARIO_NAMES_BULLET_LIST}}` | Dash-bulleted, newline-separated list, e.g. `"- Scenario1\n- Scenario2\n"` — put inside a quoted JSON string. Matches pipelines expecting a YAML-list-shaped string parameter (e.g. a `TestNames` field parsed as one name per line) |
+| `{{FEATURE_NAMES_CSV}}` | Comma-separated, deduplicated **feature file names** (not scenario names, not full paths — just e.g. `CreateOrder.feature`) — put inside a quoted JSON string |
+| `{{FEATURE_NAMES_JSON_ARRAY}}` | Deduplicated feature file names as a real JSON array, e.g. `["CreateOrder.feature","CancelOrder.feature"]` — do NOT wrap in quotes |
+| `{{FEATURE_NAMES_BULLET_LIST}}` | Deduplicated feature file names as a dash-bulleted, newline-separated list, e.g. `"- CreateOrder.feature\n- CancelOrder.feature\n"` — put inside a quoted JSON string. Use this instead of the scenario-name equivalents when your pipeline/test runner executes at the feature-file level rather than the individual-scenario level (one feature file often contains several impacted scenarios, so this list is typically shorter and avoids re-running the same file multiple times) |
 | `{{FEATURE_FILES_CSV}}` | Comma-separated feature file paths — put inside a quoted JSON string |
 | `{{PR_ID}}` | The PR number — put inside or outside quotes depending on whether your field is a string or number |
 | `{{SCENARIO_COUNT}}` | Count of scenarios being triggered |

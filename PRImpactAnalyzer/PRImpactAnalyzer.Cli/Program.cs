@@ -245,7 +245,7 @@ static async Task<int> RunTriggerPipelineAsync(PrImpactConfig config)
     // feature file commonly contains several impacted scenarios and most pipelines/test
     // runners execute at the feature-file level, not the individual-scenario level.
     var distinctFeatureNames = toRun
-        .Select(s => string.IsNullOrWhiteSpace(s.FeatureFile) ? s.FeatureFile : Path.GetFileName(s.FeatureFile))
+        .Select(s => string.IsNullOrWhiteSpace(s.FeatureFile) ? s.FeatureFile : Path.GetFileNameWithoutExtension(s.FeatureFile))
         .Where(n => !string.IsNullOrWhiteSpace(n))
         .Distinct()
         .ToList();

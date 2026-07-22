@@ -100,9 +100,25 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
         var changesResp = await http.GetStringAsync(changesUrl, ct);
         var changesDoc = JsonDocument.Parse(changesResp);
 
-        return changesDoc.RootElement.GetProperty("changeEntries").EnumerateArray()
-            .Where(e => e.TryGetProperty("item", out var item) && item.TryGetProperty("isFolder", out var isFolder) && !isFolder.GetBoolean())
+        var allEntries = changesDoc.RootElement.GetProperty("changeEntries").EnumerateArray().ToList();
+
+        // IMPORTANT: Azure DevOps commonly OMITS the "isFolder" property entirely for regular
+        // files — it's typically only present (and true) on folder entries. The previous
+        // filter required isFolder to be PRESENT AND false, which silently excluded every
+        // real file whenever the API omitted the property (a very common response shape) —
+        // resulting in zero changed items reaching diff-fetching, with no exception anywhere
+        // to explain why. Correct logic: exclude ONLY entries explicitly marked isFolder:true;
+        // treat an absent property as "not a folder" (i.e. a file), which is what it means.
+        var fileEntries = allEntries
+            .Where(e => e.TryGetProperty("item", out var item) &&
+                        (!item.TryGetProperty("isFolder", out var isFolder) || !isFolder.GetBoolean()))
             .ToList();
+
+        if (allEntries.Count > 0 && fileEntries.Count == 0)
+            LastContentFetchWarnings.Add(
+                $"PR iteration returned {allEntries.Count} change entries, but 0 passed file filtering — check the changeEntries response shape for this org/API version.");
+
+        return fileEntries;
     }
 
     private async Task<FileDiff?> FetchFileDiffAsync(HttpClient http, string orgUrl, string project, string repo, JsonElement item, PrMetadata prMeta, CancellationToken ct)

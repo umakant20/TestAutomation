@@ -21,6 +21,7 @@ public class PromptBuilder
         sb.AppendLine("LINKED WORK ITEMS are SECONDARY, corroborating context (what the change is meant to do) — use them to understand intent and to break ties, not as a substitute for code-level evidence.");
         sb.AppendLine("Do NOT ask clarifying questions. Use ONLY the data below. Match on name/steps if bound refs are absent, rate M or V accordingly.");
         sb.AppendLine("Scenarios marked [WI-MATCH] are already confirmed HIGH via work item traceability — keep them H unless clearly wrong.");
+        sb.AppendLine("Scenarios marked [SEMANTIC score] were surfaced by text similarity to the PR/work-item description, not a code or tag match — verify like any other candidate, this is a hint, not a confirmed fact.");
         sb.AppendLine("Return ONLY this JSON, no prose, no markdown fences:");
         sb.AppendLine("{\"impacted\":[{\"s\":\"<scenario name>\",\"f\":\"<feature file>\",\"m\":\"<matched change>\",\"c\":\"H|M|V\",\"e\":\"code|workitem|both\",\"r\":\"<reason <12 words>\"}]}");
         sb.AppendLine("c: H=direct symbol match, M=semantic/behavioral, V=plausible unconfirmed. Omit non-matches.");
@@ -144,11 +145,12 @@ public class PromptBuilder
                 // Sanitize scenario name — backslashes and double quotes break parsing
                 var name = Sanitize(s.ScenarioName);
                 var wiFlag = s.MatchedWorkItemIds.Count > 0 ? $"[WI-MATCH #{string.Join(",#", s.MatchedWorkItemIds)}] " : "";
+                var semanticFlag = s.SemanticScore.HasValue ? $"[SEMANTIC {s.SemanticScore.Value:F1}] " : "";
 
                 if (hasStrongSignal)
-                    sb.AppendLine($"  {wiFlag}{name}|{relevantBound}");
+                    sb.AppendLine($"  {wiFlag}{semanticFlag}{name}|{relevantBound}");
                 else
-                    sb.AppendLine($"  {wiFlag}{name}||{steps}");
+                    sb.AppendLine($"  {wiFlag}{semanticFlag}{name}||{steps}");
             }
         }
 

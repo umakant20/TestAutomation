@@ -118,6 +118,12 @@ public class ScenarioRecord
     /// or feature/scenario text — a deterministic, non-LLM signal used to force-prioritize
     /// scenarios that are explicitly traceable to the same requirement as the PR.</summary>
     public List<int> MatchedWorkItemIds { get; set; } = new();
+
+    /// <summary>Non-null when this scenario was surfaced as a candidate via BM25 text
+    /// similarity against the PR/work-item natural-language text (not code). This is a SOFT
+    /// signal — it only gets the scenario a chance to be evaluated by the LLM, it does not
+    /// force it into the final impacted list the way MatchedWorkItemIds does.</summary>
+    public double? SemanticScore { get; set; }
 }
 
 // ── Result models ─────────────────────────────────────────────────────────────

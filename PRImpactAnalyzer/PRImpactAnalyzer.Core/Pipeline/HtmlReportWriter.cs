@@ -166,6 +166,7 @@ td{{padding:10px 12px;vertical-align:top;}}
 .badge-src-code{{background:rgba(63,185,80,.1);color:#7ee08a;border:1px solid rgba(63,185,80,.25);margin-left:6px;}}
 .badge-src-workitem{{background:rgba(210,153,34,.1);color:#e3b341;border:1px solid rgba(210,153,34,.25);margin-left:6px;}}
 .badge-src-tag{{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);margin-left:6px;}}
+.badge-src-semantic{{background:rgba(139,92,246,.1);color:#a78bfa;border:1px solid rgba(139,92,246,.25);margin-left:6px;}}
 
 /* ── Work items ───────────────────────────────────────────────────────── */
 .wi-card{{
@@ -291,6 +292,7 @@ pre{{
         int countCode      = sorted.Count(s => s.MatchSources.Contains("Code"));
         int countWorkItem  = sorted.Count(s => s.MatchSources.Contains("WorkItem"));
         int countWiTag     = sorted.Count(s => s.MatchSources.Contains("WorkItemTag"));
+        int countSemantic  = sorted.Count(s => s.MatchSources.Contains("Semantic"));
 
         sb.Append("<div class=\"section-head\">Summary</div>\n");
         sb.Append("<div class=\"summary-grid\">\n");
@@ -308,6 +310,7 @@ pre{{
         sb.Append($"  <div class=\"stat-card stat-high\"><div class=\"lbl\">From Code Changes</div><div class=\"val\">{countCode}</div></div>\n");
         sb.Append($"  <div class=\"stat-card stat-medium\"><div class=\"lbl\">From Work Item Description</div><div class=\"val\">{countWorkItem}</div></div>\n");
         sb.Append($"  <div class=\"stat-card stat-total\"><div class=\"lbl\">From Work Item Tag Match</div><div class=\"val\">{countWiTag}</div></div>\n");
+        sb.Append($"  <div class=\"stat-card stat-verify\"><div class=\"lbl\">From Semantic Search</div><div class=\"val\">{countSemantic}</div></div>\n");
         sb.Append("</div>\n");
 
         // ── Impacted scenarios ────────────────────────────────────────────────────
@@ -332,6 +335,7 @@ pre{{
     <li><span class=""badge badge-src-code"">CODE</span> — matched via changed code symbols or diff snippets.</li>
     <li><span class=""badge badge-src-workitem"">WI-DESC</span> — matched via a linked work item's description/repro steps text.</li>
     <li><span class=""badge badge-src-tag"">WI-TAG #id</span> — deterministic: this scenario's Gherkin tag matches a work item linked to this PR. Always forced to HIGH.</li>
+    <li><span class=""badge badge-src-semantic"">SEMANTIC</span> — surfaced via BM25 text similarity to the PR/work-item description (not code, not a tag) — a soft candidate signal the LLM then verified.</li>
   </ul>
 </div>
 ");
@@ -369,6 +373,8 @@ pre{{
                     sourceBadges.Append("<span class=\"badge badge-src-workitem\">WI-DESC</span>");
                 if (s.MatchSources.Contains("WorkItemTag") || s.MatchedWorkItemIds.Count > 0)
                     sourceBadges.Append($"<span class=\"badge badge-src-tag\">WI-TAG #{string.Join(", #", s.MatchedWorkItemIds)}</span>");
+                if (s.MatchSources.Contains("Semantic"))
+                    sourceBadges.Append("<span class=\"badge badge-src-semantic\">SEMANTIC</span>");
 
                 sb.Append($@"<tr class=""{rc}"" data-conf=""{conf}"">
   <td class=""col-num"">{idx++}</td>

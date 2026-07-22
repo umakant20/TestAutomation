@@ -116,6 +116,22 @@ public class AnalysisPipeline
             if (!relevant.Any(r => r.FeatureFile == wm.FeatureFile && r.ScenarioName == wm.ScenarioName))
                 relevant.Add(wm);
 
+        // BM25 semantic-ish candidate search (Option C): surfaces scenarios whose NAME/STEPS/
+        // TAGS share meaningful terms with the PR's and linked work items' natural-language
+        // text, even with zero literal keyword/symbol-name overlap. This is a SOFT signal —
+        // it only earns a scenario a spot in the candidate pool the LLM verifies; unlike the
+        // work-item tag match above, it does NOT force-include anything into the final result.
+        var semanticQuery = Bm25Ranker.BuildQueryText(prDiff.Metadata, prDiff.LinkedWorkItems);
+        var semanticMatches = Bm25Ranker.FindTopMatches(scenarios, semanticQuery, topK: 30);
+        prepared.SemanticMatchedScenarios = semanticMatches.Select(m => m.Scenario).ToList();
+        foreach (var (semScenario, score) in semanticMatches)
+        {
+            semScenario.SemanticScore = score;
+            if (!relevant.Any(r => r.FeatureFile == semScenario.FeatureFile && r.ScenarioName == semScenario.ScenarioName))
+                relevant.Add(semScenario);
+        }
+        _logger.LogInformation("BM25 semantic search surfaced {Count} candidate(s).", semanticMatches.Count);
+
         if (relevant.Count == 0)
         {
             prepared.Warning = "No scenarios shared any keyword with the changed symbols. Check the Changed Symbols list — symbol extraction may have found nothing test-relevant.";
@@ -227,6 +243,19 @@ public class AnalysisPipeline
             }
         }
 
+        // BM25 semantic evidence tagging — SOFT signal, deliberately no "else" branch: unlike
+        // the work-item tag backstop above, we do NOT force-create an entry for a scenario the
+        // LLM didn't confirm. A semantic hit only earned this scenario a spot in the candidate
+        // pool; the LLM's own verification is what determines whether it's actually impacted.
+        // We only annotate entries the LLM ALREADY included, so a reviewer can see one more
+        // piece of "why this surfaced" context on scenarios that turned out to be genuine.
+        foreach (var semScenario in prepared.SemanticMatchedScenarios)
+        {
+            var key = (semScenario.FeatureFile, semScenario.ScenarioName);
+            if (merged.TryGetValue(key, out var existing) && !existing.MatchSources.Contains("Semantic"))
+                existing.MatchSources.Add("Semantic");
+        }
+
         result.ImpactedScenarios = merged.Values
             .OrderByDescending(s => s.Confidence)
             .ThenBy(s => s.FeatureFile)
@@ -313,6 +342,13 @@ public class PreparedAnalysis
     /// Finalize() can apply the deterministic HIGH-confidence backstop even after a
     /// round-trip through state.json (tags/matches don't need re-parsing the test repo).</summary>
     public List<ScenarioRecord> WorkItemMatchedScenarios { get; set; } = new();
+
+    /// <summary>Scenarios surfaced as candidates via BM25 text similarity — persisted so
+    /// Finalize() can tag the final impacted result with "Semantic" evidence for any of
+    /// these the LLM actually confirmed. Unlike WorkItemMatchedScenarios, this is NOT a
+    /// force-include backstop — a semantic hit only earns the scenario a spot in the
+    /// candidate pool sent to the LLM; the LLM's own verification still decides confidence.</summary>
+    public List<ScenarioRecord> SemanticMatchedScenarios { get; set; } = new();
 
     /// <summary>Non-fatal warnings if some files' content couldn't be fetched.</summary>
     public List<string> ContentFetchWarnings { get; set; } = new();

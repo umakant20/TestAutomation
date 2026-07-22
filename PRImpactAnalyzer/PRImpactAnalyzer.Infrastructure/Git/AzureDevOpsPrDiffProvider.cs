@@ -132,7 +132,21 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
                 NewContent = newContent
             };
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            // Previously a bare `catch { return null; }` — completely silent, meaning if
+            // anything failed here (before even reaching file-content fetching), the file's
+            // diff vanished with zero warning anywhere, including the report's warning
+            // banner (which only tracked FetchFileContentAsync's own failures). Logging here
+            // too closes that gap — a PR where every file hits this path will now show a
+            // clear warning instead of an unexplained empty Changed Symbols/PR Diff section.
+            var pathForWarning = "unknown file";
+            try { pathForWarning = item.GetProperty("item").GetProperty("path").GetString() ?? pathForWarning; }
+            catch { /* item shape itself was unexpected — keep the placeholder name */ }
+
+            LastContentFetchWarnings.Add($"{pathForWarning}: failed to build file diff — {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>

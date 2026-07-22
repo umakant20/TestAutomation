@@ -167,6 +167,11 @@ public class AnalysisResult
     /// <summary>Non-fatal warnings if some files' content couldn't be fetched — a likely cause
     /// of thin/empty Changed Symbols or Code Snippets sections if this is non-empty.</summary>
     public List<string> ContentFetchWarnings { get; set; } = new();
+
+    /// <summary>How often each currently-impacted scenario has been flagged across recent
+    /// past runs (populated by the CLI from Reports/history.jsonl, not by the pipeline
+    /// itself) — surfaced in the report to highlight consistently "hot" scenarios/areas.</summary>
+    public List<ScenarioFrequency> HistoricalFrequency { get; set; } = new();
 }
 
 public class LlmExchange
@@ -177,6 +182,32 @@ public class LlmExchange
     public string Prompt { get; set; } = string.Empty;
     public string RawResponse { get; set; } = string.Empty;
     public int ParsedImpactedCount { get; set; }
+}
+
+/// <summary>One line of the cross-run history log (Reports/history.jsonl) — one entry per
+/// completed 'report' run, used to compute how often each scenario gets flagged over time.</summary>
+public class HistoryEntry
+{
+    public int PrId { get; set; }
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    public List<HistoryScenario> Scenarios { get; set; } = new();
+}
+
+public class HistoryScenario
+{
+    public string ScenarioName { get; set; } = string.Empty;
+    public string FeatureFile { get; set; } = string.Empty;
+    public string Confidence { get; set; } = string.Empty;
+}
+
+/// <summary>Computed frequency for one scenario across the last N logged runs — surfaced in
+/// the report as a "how often has this scenario been flagged" signal.</summary>
+public class ScenarioFrequency
+{
+    public string ScenarioName { get; set; } = string.Empty;
+    public string FeatureFile { get; set; } = string.Empty;
+    public int FlaggedCount { get; set; }
+    public int TotalRuns { get; set; }
 }
 
 // ── Request model ─────────────────────────────────────────────────────────────

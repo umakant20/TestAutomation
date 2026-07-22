@@ -383,6 +383,30 @@ pre{{
             sb.Append("</tbody>\n</table>\n</div>\n");
         }
 
+        // ── Historical Frequency ──────────────────────────────────────────────────
+        sb.Append("<div class=\"section-head\">Historical Frequency</div>\n");
+        if (r.HistoricalFrequency.Count == 0)
+        {
+            sb.Append("<div class=\"empty\">No history yet, or none of this run's impacted scenarios were flagged in any past logged run.</div>\n");
+        }
+        else
+        {
+            sb.Append("<div class=\"legend\">How often each of this run's impacted scenarios has also been flagged in recent past runs — a consistently high count suggests a \"hot\" area of the suite worth extra attention regardless of this run's confidence rating.</div>\n");
+            sb.Append("<div class=\"tbl-wrap\">\n<table>\n");
+            sb.Append("<thead><tr><th style=\"width:30%\">Scenario</th><th style=\"width:30%\">Feature File</th><th>Flagged</th></tr></thead>\n<tbody>\n");
+            foreach (var f in r.HistoricalFrequency)
+            {
+                var pct = f.TotalRuns > 0 ? (int)Math.Round(100.0 * f.FlaggedCount / f.TotalRuns) : 0;
+                sb.Append($@"<tr>
+  <td><strong>{E(f.ScenarioName)}</strong></td>
+  <td><code>{E(f.FeatureFile)}</code></td>
+  <td>{f.FlaggedCount} of last {f.TotalRuns} runs ({pct}%)</td>
+</tr>
+");
+            }
+            sb.Append("</tbody>\n</table>\n</div>\n");
+        }
+
         // ── Changed symbols ────────────────────────────────────────────────────────
         sb.Append("<div class=\"section-head\">Changed Symbols</div>\n");
         if (r.ChangedSymbols.Count == 0)

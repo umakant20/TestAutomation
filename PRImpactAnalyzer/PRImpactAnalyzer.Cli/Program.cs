@@ -126,9 +126,28 @@ static async Task<int> RunReportAsync(PrImpactConfig config)
         services => PRImpactAnalyzer.Infrastructure.PrImpactAnalyzerRegistration.AddPrImpactAnalyzer(services),
         logging  => logging.AddConsole().SetMinimumLevel(LogLevel.Warning));
 
-    var result = await analyzer.FinalizeFromFilesAsync(pointer.StatePath, new[] { responsePath }, reportPath);
+    var result = await analyzer.FinalizeOnlyAsync(pointer.StatePath, new[] { responsePath });
 
     if (!result.Success) { Console.Error.WriteLine($"ERROR: {result.ErrorMessage}"); return 1; }
+
+    // ── Historical frequency: compute BEFORE logging this run, so "flagged in N of last M"
+    // reflects PAST runs only, not double-counting the run currently being reported. ────────
+    var history = PRImpactAnalyzer.Core.Pipeline.HistoryLog.ReadAll(reportsBaseDir);
+    result.HistoricalFrequency = PRImpactAnalyzer.Core.Pipeline.HistoryLog.ComputeFrequency(history, result.ImpactedScenarios);
+
+    PrImpactAnalyzerFacade.WriteReport(result, reportPath);
+
+    // Now log this run for future frequency computations.
+    await PRImpactAnalyzer.Core.Pipeline.HistoryLog.AppendAsync(reportsBaseDir, new PRImpactAnalyzer.Core.Models.HistoryEntry
+    {
+        PrId = pointer.PrId,
+        Scenarios = result.ImpactedScenarios.Select(s => new PRImpactAnalyzer.Core.Models.HistoryScenario
+        {
+            ScenarioName = s.ScenarioName,
+            FeatureFile  = s.FeatureFile,
+            Confidence   = s.Confidence.ToString(),
+        }).ToList()
+    });
 
     // Write the impacted-tests manifest — a small, stable handoff file so "execute" doesn't
     // need to re-parse response.txt or re-run Finalize(). One line per impacted scenario.

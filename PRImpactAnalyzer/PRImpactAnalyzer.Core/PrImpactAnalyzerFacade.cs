@@ -113,11 +113,13 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
     }
 
     /// <summary>
-    /// Reads the state file + response file(s), automatically handles the combined-file case
-    /// (all chunk replies pasted into one file), builds the HTML report.
+    /// Reads the state file + response file(s), parses and finalizes the result — does NOT
+    /// write the HTML report. Lets a caller enrich the result (e.g. attach historical
+    /// frequency data) before writing, via WriteReport(). Use FinalizeFromFilesAsync instead
+    /// if you don't need that — it does both steps in one call, unchanged for existing callers.
     /// </summary>
-    public async Task<AnalysisResult> FinalizeFromFilesAsync(
-        string stateFilePath, IReadOnlyList<string> responseFilePaths, string reportFilePath)
+    public async Task<AnalysisResult> FinalizeOnlyAsync(
+        string stateFilePath, IReadOnlyList<string> responseFilePaths)
     {
         var prepared = JsonSerializer.Deserialize<PreparedAnalysis>(
             await File.ReadAllTextAsync(stateFilePath), JsonOptions)
@@ -142,8 +144,25 @@ public sealed class PrImpactAnalyzerFacade : IAsyncDisposable
                 responses.Add(await File.ReadAllTextAsync(path));
         }
 
-        var result = _pipeline.Finalize(prepared, responses);
+        return _pipeline.Finalize(prepared, responses);
+    }
+
+    /// <summary>Writes the HTML report for an already-computed result — the second half of
+    /// what FinalizeFromFilesAsync does in one call, split out so callers can enrich the
+    /// result (e.g. historical frequency) in between.</summary>
+    public static void WriteReport(AnalysisResult result, string reportFilePath) =>
         HtmlReportWriter.Write(result, reportFilePath);
+
+    /// <summary>
+    /// Reads the state file + response file(s), automatically handles the combined-file case
+    /// (all chunk replies pasted into one file), builds the HTML report. Unchanged behavior
+    /// for existing callers — internally just calls FinalizeOnlyAsync + WriteReport.
+    /// </summary>
+    public async Task<AnalysisResult> FinalizeFromFilesAsync(
+        string stateFilePath, IReadOnlyList<string> responseFilePaths, string reportFilePath)
+    {
+        var result = await FinalizeOnlyAsync(stateFilePath, responseFilePaths);
+        WriteReport(result, reportFilePath);
         return result;
     }
 

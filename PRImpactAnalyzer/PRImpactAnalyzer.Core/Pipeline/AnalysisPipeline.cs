@@ -106,7 +106,7 @@ public class AnalysisPipeline
             prepared.WorkItemMatchedScenarios = scenarios.Where(s => s.MatchedWorkItemIds.Count > 0).ToList();
         }
 
-        var relevant = _promptBuilder.PreFilter(symbols, scenarios);
+        var relevant = _promptBuilder.PreFilter(symbols, scenarios, prDiff.Metadata, prDiff.LinkedWorkItems);
         _logger.LogInformation("Pre-filter kept {Relevant} of {Total} scenarios.", relevant.Count, scenarios.Count);
 
         // Always keep work-item-matched scenarios even if the keyword pre-filter missed them —

@@ -159,12 +159,25 @@ public class PromptBuilder
     /// Pre-filters scenarios globally (once, before chunking) by keyword overlap with
     /// changed symbols. Primary token-saving step — Copilot never sees irrelevant scenarios.
     /// </summary>
-    public List<ScenarioRecord> PreFilter(List<ChangedSymbol> symbols, List<ScenarioRecord> scenarios)
+    public List<ScenarioRecord> PreFilter(
+        List<ChangedSymbol> symbols, List<ScenarioRecord> scenarios,
+        PrMetadata? prMetadata = null, List<WorkItemInfo>? linkedWorkItems = null)
     {
-        if (symbols.Count == 0)
-            return scenarios.Take(MaxScenariosGlobal).ToList();
+        var symbolKeywords = BuildKeywordSet(symbols);
 
-        var keywords = BuildKeywordSet(symbols);
+        // Business-concept keywords: pulled from the PR's own title/description and any
+        // linked work items' title/description/repro steps/acceptance criteria. Closes a
+        // real gap — a scenario relevant on business/domain grounds (e.g. the PR title says
+        // "fix hold release for cancelled orders" and a scenario is literally named
+        // "Cancelled order hold release") can share zero code-symbol-name overlap with the
+        // diff, and would otherwise be silently dropped before the LLM ever saw it.
+        var businessKeywords = BuildBusinessKeywordSet(prMetadata, linkedWorkItems);
+
+        var keywords = new HashSet<string>(symbolKeywords);
+        keywords.UnionWith(businessKeywords);
+
+        if (keywords.Count == 0)
+            return scenarios.Take(MaxScenariosGlobal).ToList();
 
         return scenarios.Select(s =>
         {
@@ -174,14 +187,57 @@ public class PromptBuilder
                 .Concat(s.BoundEndpoints).Concat(s.BoundPageObjects)
                 .Concat(s.BoundSoapProxies).Concat(s.BoundColdFusionPages)
                 .Concat(s.BoundSelectors)).ToLowerInvariant();
-            var score = keywords.Count(k => haystack.Contains(k));
-            return (Scenario: s, Score: score);
+
+            // Symbol-based hits count double — they're stronger, more specific evidence than
+            // a shared business word, so a scenario shouldn't outrank a real code match just
+            // by mentioning several generic domain terms.
+            var symbolScore = symbolKeywords.Count(k => haystack.Contains(k)) * 2;
+            var businessScore = businessKeywords.Count(k => haystack.Contains(k));
+            return (Scenario: s, Score: symbolScore + businessScore);
         })
         .Where(x => x.Score > 0)
         .OrderByDescending(x => x.Score)
         .Take(MaxScenariosGlobal)
         .Select(x => x.Scenario)
         .ToList();
+    }
+
+    /// <summary>
+    /// Extracts meaningful domain/business words from the PR's own title/description and any
+    /// linked work items — a completely different vocabulary source from changed-symbol names,
+    /// aimed at catching scenarios that match on WHAT the change is for rather than HOW it was
+    /// coded. Stopwords and very short/common words are filtered out to avoid the set becoming
+    /// so broad it stops discriminating anything.
+    /// </summary>
+    private static HashSet<string> BuildBusinessKeywordSet(PrMetadata? prMetadata, List<WorkItemInfo>? linkedWorkItems)
+    {
+        var stopwords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "the","a","an","and","or","but","if","then","when","this","that","these","those",
+            "is","are","was","were","be","been","being","to","of","in","on","at","for","with",
+            "from","by","as","it","its","not","no","do","does","did","will","would","should",
+            "can","could","may","might","must","shall","have","has","had","we","you","they",
+            "i","he","she","him","her","them","us","our","your","their","also","into","onto",
+            "fix","fixed","fixes","fixing","update","updated","updates","updating","add","added",
+            "adds","adding","change","changed","changes","changing","issue","bug","task","story",
+            "pr","pull","request","please","need","needs","needed",
+        };
+
+        var text = string.Join(' ', new[]
+        {
+            prMetadata?.Title, prMetadata?.Description
+        }
+        .Concat(linkedWorkItems is null ? Enumerable.Empty<string?>() : linkedWorkItems.SelectMany(wi => new[]
+        {
+            wi.Title, wi.Description, wi.ReproSteps, wi.AcceptanceCriteria
+        }))
+        .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        return Regex.Matches(text, @"[a-zA-Z][a-zA-Z\-']{3,}")
+            .Select(m => m.Value.ToLowerInvariant())
+            .Where(w => !stopwords.Contains(w))
+            .Distinct()
+            .ToHashSet();
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────

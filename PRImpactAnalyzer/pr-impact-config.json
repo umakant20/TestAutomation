@@ -14,9 +14,6 @@
   "pipelineId": 123,
   "pipelineRequestBodyTemplateFile": "pipeline-request-template.json",
 
-  "embeddingModelPath": null,
-  "embeddingVocabPath": null,
-
   "pySemanticEnabled": false,
   "pythonExecutablePath": "python",
   "pySemanticScriptPath": "python-semantic-rank/semantic_rank.py"

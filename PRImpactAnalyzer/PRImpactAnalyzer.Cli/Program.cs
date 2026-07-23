@@ -84,9 +84,7 @@ static async Task<int> RunPrepareAsync(PrImpactConfig config, string? explicitPr
             TestRepoLocalPath = config.TestRepoPath,
             DevRepoLocalPath  = config.DevRepoPath ?? string.Empty,
             AzureDevOpsPat    = pat,
-            EmbeddingModelPath = config.EmbeddingModelPath,
-            EmbeddingVocabPath = config.EmbeddingVocabPath,
-            EmbeddingCacheDir  = reportsBaseDir,
+            WorkingDir = reportsBaseDir,
             PySemanticEnabled     = config.PySemanticEnabled,
             PythonExecutablePath  = config.PythonExecutablePath,
             PySemanticScriptPath  = config.PySemanticScriptPath,
@@ -452,14 +450,6 @@ public class PrImpactConfig
     /// <summary>Which confidence tiers to include when running 'execute'/'trigger-pipeline':
     /// "HighOnly" (default), "HighAndMedium", or "All".</summary>
     [JsonPropertyName("testExecutionScope")]  public string? TestExecutionScope  { get; set; }
-
-    /// <summary>Optional — path to an ONNX sentence-embedding model (e.g. all-MiniLM-L6-v2),
-    /// for Option B neural-embedding candidate search alongside BM25. Skipped silently if
-    /// either this or embeddingVocabPath is missing or the file doesn't exist.</summary>
-    [JsonPropertyName("embeddingModelPath")]  public string? EmbeddingModelPath  { get; set; }
-
-    /// <summary>Optional — path to the matching vocab.txt for embeddingModelPath.</summary>
-    [JsonPropertyName("embeddingVocabPath")]  public string? EmbeddingVocabPath  { get; set; }
 
     /// <summary>Optional — enables the Python (scikit-learn TF-IDF+SVD) semantic ranker.
     /// No external model download — trains fresh from this run's own scenario/PR text.

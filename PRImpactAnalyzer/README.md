@@ -129,55 +129,9 @@ DevOps), then POSTs it to `{pipelineOrgUrl}/{pipelineProject}/_apis/pipelines/{p
 using your existing `azureDevOpsPat`. It prints the exact substituted body before sending, so
 you can see precisely what went out.
 
-## Neural embedding search (Option B, opt-in)
-
-Alongside the built-in BM25 text-similarity search, you can enable real neural sentence
-embeddings via ONNX Runtime — pure C#, no Python. This catches paraphrases/synonyms that
-BM25's term-matching structurally cannot (e.g. "cancel order" vs "void purchase").
-
-**This is entirely optional.** If not configured, or if the files below aren't found, it's
-silently skipped — BM25, keyword pre-filtering, and work-item matching continue working
-exactly as before.
-
-### Setup
-
-1. Download a small sentence-embedding model in ONNX format — e.g.
-   [Xenova/all-MiniLM-L6-v2](https://huggingface.co/Xenova/all-MiniLM-L6-v2/tree/main/onnx)
-   (`model.onnx`, ~90MB) and `vocab.txt` from the same repo.
-2. Set both paths in `pr-impact-config.json`:
-   ```json
-   {
-     "embeddingModelPath": "C:\\models\\all-MiniLM-L6-v2\\model.onnx",
-     "embeddingVocabPath": "C:\\models\\all-MiniLM-L6-v2\\vocab.txt"
-   }
-   ```
-3. Rebuild — `Microsoft.ML.OnnxRuntime` restores automatically as a NuGet package (already
-   referenced in `PRImpactAnalyzer.Core.csproj`, no separate install step).
-
-### If you use a different ONNX export
-
-`OnnxEmbedder.cs` assumes standard BERT-family input names (`input_ids`, `attention_mask`,
-`token_type_ids`) and an output called `last_hidden_state`. If your model's ONNX export uses
-different names, you'll see a runtime error naming the missing input/output — update the
-string literals in `EmbedInternal()` in `OnnxEmbedder.cs` to match (you can inspect
-`session.InputMetadata.Keys` / `OutputMetadata.Keys` at runtime to find the actual names).
-
-### Caching
-
-Embeddings are cached on disk (`Reports/embedding-cache.json`, keyed by content hash) so
-unchanged scenarios aren't re-embedded every run — only new/changed scenario text triggers
-fresh inference.
-
-### Report visibility
-
-Scenarios confirmed impacted that were also surfaced via embedding search get an `EMBEDDING`
-badge, and a "From Neural Embedding" count appears in the evidence-source summary — same
-soft-signal treatment as `SEMANTIC` (BM25): a hit only earns a candidate-pool spot, never
-forces a scenario into the final impacted list.
-
 ## Python semantic search (Option A2, opt-in)
 
-An alternative/additional candidate-search signal to BM25 and ONNX embeddings — TF-IDF +
+An additional candidate-search signal alongside BM25 — TF-IDF +
 Truncated SVD via scikit-learn, run as a subprocess. Unlike a pretrained neural model, this
 **trains fresh every run purely from the current PR's own scenario/PR text** — no external
 model download of any kind, nothing sent anywhere. Suited to orgs where Hugging Face (or
@@ -240,7 +194,6 @@ as `SEMANTIC`/`EMBEDDING`: earns a candidate-pool spot only, never forces inclus
 | `testExecutionScope` | No | `HighOnly` (default) / `HighAndMedium` / `All` |
 | `pipelineOrgUrl` / `pipelineProject` / `pipelineId` | Yes, for `trigger-pipeline` | Identify which Azure DevOps pipeline to trigger |
 | `pipelineRequestBodyTemplateFile` | Yes, for `trigger-pipeline` | Path to your own working request body template with placeholder tokens |
-| `embeddingModelPath` / `embeddingVocabPath` | No | ONNX model + vocab for neural embedding search — skipped silently if unset |
 | `pySemanticEnabled` / `pythonExecutablePath` / `pySemanticScriptPath` | No | Python (scikit-learn) semantic ranker — no external model download, skipped silently if disabled |
 
 ## Project structure

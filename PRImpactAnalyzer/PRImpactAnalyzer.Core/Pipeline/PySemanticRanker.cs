@@ -13,7 +13,7 @@ namespace PRImpactAnalyzer.Core.Pipeline;
 /// Nothing here ever leaves the machine; only PyPI's `scikit-learn`/`numpy` packages need to
 /// be installed once via `pip install -r python-semantic-rank/requirements.txt`.
 ///
-/// Same soft-signal contract as Bm25Ranker/OnnxEmbedder: a hit only earns a scenario a spot
+/// Same soft-signal contract as Bm25Ranker: a hit only earns a scenario a spot
 /// in the candidate pool sent to the LLM — it never force-includes anything.
 ///
 /// Gracefully skipped (never throws) if Python isn't found, the script is missing, the

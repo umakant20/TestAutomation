@@ -124,6 +124,10 @@ public class ScenarioRecord
     /// signal — it only gets the scenario a chance to be evaluated by the LLM, it does not
     /// force it into the final impacted list the way MatchedWorkItemIds does.</summary>
     public double? SemanticScore { get; set; }
+
+    /// <summary>Non-null when surfaced via the Python TF-IDF+SVD ranker (Option A2) — same
+    /// soft-signal contract as SemanticScore.</summary>
+    public double? PySemanticScore { get; set; }
 }
 
 // ── Result models ─────────────────────────────────────────────────────────────
@@ -224,4 +228,26 @@ public class AnalysisRequest
     public string AzureDevOpsPat { get; set; } = string.Empty;
     public string DevRepoLocalPath { get; set; } = string.Empty;
     public string TestRepoLocalPath { get; set; } = string.Empty;
+
+    /// <summary>Optional — path to an ONNX sentence-embedding model (e.g. all-MiniLM-L6-v2).
+    /// If null/missing/fails to load, embedding-based search is silently skipped.</summary>
+    public string? EmbeddingModelPath { get; set; }
+
+    /// <summary>Optional — path to the matching vocab.txt for the embedding model above.</summary>
+    public string? EmbeddingVocabPath { get; set; }
+
+    /// <summary>Where to persist the embedding cache (embedding-cache.json) across runs.
+    /// Defaults to the current directory if not set.</summary>
+    public string? EmbeddingCacheDir { get; set; }
+
+    /// <summary>Optional — enables the Python (scikit-learn TF-IDF+SVD) semantic ranker.
+    /// Trains fresh from this run's own scenario/PR text — no external model download.</summary>
+    public bool PySemanticEnabled { get; set; }
+
+    /// <summary>Path to the python executable (or a venv's python.exe) — defaults to "python"
+    /// on PATH if not set.</summary>
+    public string? PythonExecutablePath { get; set; }
+
+    /// <summary>Path to python-semantic-rank/semantic_rank.py.</summary>
+    public string? PySemanticScriptPath { get; set; }
 }

@@ -84,6 +84,12 @@ static async Task<int> RunPrepareAsync(PrImpactConfig config, string? explicitPr
             TestRepoLocalPath = config.TestRepoPath,
             DevRepoLocalPath  = config.DevRepoPath ?? string.Empty,
             AzureDevOpsPat    = pat,
+            EmbeddingModelPath = config.EmbeddingModelPath,
+            EmbeddingVocabPath = config.EmbeddingVocabPath,
+            EmbeddingCacheDir  = reportsBaseDir,
+            PySemanticEnabled     = config.PySemanticEnabled,
+            PythonExecutablePath  = config.PythonExecutablePath,
+            PySemanticScriptPath  = config.PySemanticScriptPath,
         },
         reportsBaseDir);
 
@@ -446,6 +452,26 @@ public class PrImpactConfig
     /// <summary>Which confidence tiers to include when running 'execute'/'trigger-pipeline':
     /// "HighOnly" (default), "HighAndMedium", or "All".</summary>
     [JsonPropertyName("testExecutionScope")]  public string? TestExecutionScope  { get; set; }
+
+    /// <summary>Optional — path to an ONNX sentence-embedding model (e.g. all-MiniLM-L6-v2),
+    /// for Option B neural-embedding candidate search alongside BM25. Skipped silently if
+    /// either this or embeddingVocabPath is missing or the file doesn't exist.</summary>
+    [JsonPropertyName("embeddingModelPath")]  public string? EmbeddingModelPath  { get; set; }
+
+    /// <summary>Optional — path to the matching vocab.txt for embeddingModelPath.</summary>
+    [JsonPropertyName("embeddingVocabPath")]  public string? EmbeddingVocabPath  { get; set; }
+
+    /// <summary>Optional — enables the Python (scikit-learn TF-IDF+SVD) semantic ranker.
+    /// No external model download — trains fresh from this run's own scenario/PR text.
+    /// Requires: pip install -r python-semantic-rank/requirements.txt (scikit-learn, numpy).</summary>
+    [JsonPropertyName("pySemanticEnabled")]     public bool    PySemanticEnabled     { get; set; }
+
+    /// <summary>Path to the python executable (or a venv's python.exe) — defaults to "python"
+    /// on PATH if not set.</summary>
+    [JsonPropertyName("pythonExecutablePath")]  public string? PythonExecutablePath  { get; set; }
+
+    /// <summary>Path to python-semantic-rank/semantic_rank.py.</summary>
+    [JsonPropertyName("pySemanticScriptPath")]  public string? PySemanticScriptPath  { get; set; }
 
     // ── trigger-pipeline settings ──────────────────────────────────────────────
     /// <summary>Azure DevOps org URL, e.g. https://dev.azure.com/yourorg — for triggering

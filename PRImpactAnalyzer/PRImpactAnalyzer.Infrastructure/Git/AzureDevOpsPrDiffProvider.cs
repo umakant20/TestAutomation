@@ -135,8 +135,10 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
                 _        => FileChangeType.Modified
             };
 
-            var oldContent = await FetchFileContentAsync(http, orgUrl, project, repo, path, prMeta.TargetBranch, ct);
-            var newContent = await FetchFileContentAsync(http, orgUrl, project, repo, path, prMeta.SourceBranch, ct);
+            var oldContent = await FetchFileContentAsync(http, orgUrl, project, repo, path, prMeta.TargetBranch, ct,
+                expectedMissing: changeType == FileChangeType.Added);
+            var newContent = await FetchFileContentAsync(http, orgUrl, project, repo, path, prMeta.SourceBranch, ct,
+                expectedMissing: changeType == FileChangeType.Deleted);
             var hunks = BuildHunks(oldContent, newContent);
 
             return new FileDiff
@@ -264,7 +266,7 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
 
     private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + "…";
 
-    private async Task<string> FetchFileContentAsync(HttpClient http, string orgUrl, string project, string repo, string path, string branch, CancellationToken ct)
+    private async Task<string> FetchFileContentAsync(HttpClient http, string orgUrl, string project, string repo, string path, string branch, CancellationToken ct, bool expectedMissing = false)
     {
         try
         {
@@ -287,8 +289,16 @@ public class AzureDevOpsPrDiffProvider : IPrDiffProvider
             var resp = await http.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
             {
-                LastContentFetchWarnings.Add(
-                    $"{path} ({branch}): HTTP {(int)resp.StatusCode} — file content not retrieved, this file's changes will be invisible to symbol extraction.");
+                // A 404 is EXPECTED and not a real problem when we're fetching the "old"
+                // version of a newly-Added file (it genuinely didn't exist on the target
+                // branch yet) or the "new" version of a Deleted file (it genuinely no longer
+                // exists on the source branch). Only warn when the fetch failure is for
+                // content that SHOULD exist — a real problem worth surfacing.
+                if (!(expectedMissing && resp.StatusCode == System.Net.HttpStatusCode.NotFound))
+                {
+                    LastContentFetchWarnings.Add(
+                        $"{path} ({branch}): HTTP {(int)resp.StatusCode} — file content not retrieved, this file's changes will be invisible to symbol extraction.");
+                }
                 return string.Empty;
             }
 

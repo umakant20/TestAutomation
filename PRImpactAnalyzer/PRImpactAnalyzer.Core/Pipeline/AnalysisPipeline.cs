@@ -132,6 +132,50 @@ public class AnalysisPipeline
         }
         _logger.LogInformation("BM25 semantic search surfaced {Count} candidate(s).", semanticMatches.Count);
 
+        // ONNX neural embedding search (Option B) — opt-in, gracefully skipped if the model
+        // files aren't configured/found. Runs alongside BM25 as an independent signal that
+        // additionally catches paraphrases/synonyms BM25's term-matching cannot.
+        using (var embedder = OnnxEmbedder.TryCreate(request.EmbeddingModelPath, request.EmbeddingVocabPath, _logger))
+        {
+            if (embedder is not null)
+            {
+                var cacheDir = string.IsNullOrWhiteSpace(request.EmbeddingCacheDir) ? "." : request.EmbeddingCacheDir;
+                var cache = EmbeddingCache.Load(cacheDir);
+
+                var embeddingMatches = embedder.FindTopMatches(scenarios, semanticQuery, topK: 30, cache);
+                prepared.EmbeddingMatchedScenarios = embeddingMatches.Select(m => m.Scenario).ToList();
+                foreach (var (embScenario, score) in embeddingMatches)
+                {
+                    if (!relevant.Any(r => r.FeatureFile == embScenario.FeatureFile && r.ScenarioName == embScenario.ScenarioName))
+                        relevant.Add(embScenario);
+                }
+
+                cache.SaveIfDirty();
+                _logger.LogInformation("ONNX embedding search surfaced {Count} candidate(s).", embeddingMatches.Count);
+            }
+        }
+
+        // Python (scikit-learn TF-IDF+SVD) semantic search (Option A2) — opt-in, gracefully
+        // skipped if disabled, Python isn't found, or the script/packages aren't set up.
+        // Trains fresh from THIS run's own scenario/PR text — no external model download.
+        if (request.PySemanticEnabled && !string.IsNullOrWhiteSpace(request.PySemanticScriptPath))
+        {
+            var pythonExe = string.IsNullOrWhiteSpace(request.PythonExecutablePath) ? "python" : request.PythonExecutablePath;
+            var workingDir = string.IsNullOrWhiteSpace(request.EmbeddingCacheDir) ? "." : request.EmbeddingCacheDir;
+
+            var pySemanticMatches = await PySemanticRanker.FindTopMatchesAsync(
+                scenarios, semanticQuery, topK: 30, pythonExe, request.PySemanticScriptPath, workingDir, _logger);
+
+            prepared.PySemanticMatchedScenarios = pySemanticMatches.Select(m => m.Scenario).ToList();
+            foreach (var (pyScenario, score) in pySemanticMatches)
+            {
+                pyScenario.PySemanticScore = score;
+                if (!relevant.Any(r => r.FeatureFile == pyScenario.FeatureFile && r.ScenarioName == pyScenario.ScenarioName))
+                    relevant.Add(pyScenario);
+            }
+            _logger.LogInformation("Python semantic ranker surfaced {Count} candidate(s).", pySemanticMatches.Count);
+        }
+
         if (relevant.Count == 0)
         {
             prepared.Warning = "No scenarios shared any keyword with the changed symbols. Check the Changed Symbols list — symbol extraction may have found nothing test-relevant.";
@@ -256,6 +300,22 @@ public class AnalysisPipeline
                 existing.MatchSources.Add("Semantic");
         }
 
+        // Same soft-signal contract as the BM25 tagging above — Option B (ONNX embeddings).
+        foreach (var embScenario in prepared.EmbeddingMatchedScenarios)
+        {
+            var key = (embScenario.FeatureFile, embScenario.ScenarioName);
+            if (merged.TryGetValue(key, out var existing) && !existing.MatchSources.Contains("Embedding"))
+                existing.MatchSources.Add("Embedding");
+        }
+
+        // Same soft-signal contract — Option A2 (Python TF-IDF+SVD).
+        foreach (var pyScenario in prepared.PySemanticMatchedScenarios)
+        {
+            var key = (pyScenario.FeatureFile, pyScenario.ScenarioName);
+            if (merged.TryGetValue(key, out var existing) && !existing.MatchSources.Contains("PySemantic"))
+                existing.MatchSources.Add("PySemantic");
+        }
+
         result.ImpactedScenarios = merged.Values
             .OrderByDescending(s => s.Confidence)
             .ThenBy(s => s.FeatureFile)
@@ -349,6 +409,15 @@ public class PreparedAnalysis
     /// force-include backstop — a semantic hit only earns the scenario a spot in the
     /// candidate pool sent to the LLM; the LLM's own verification still decides confidence.</summary>
     public List<ScenarioRecord> SemanticMatchedScenarios { get; set; } = new();
+
+    /// <summary>Scenarios surfaced via ONNX neural embedding similarity (Option B) — same
+    /// soft-signal contract as SemanticMatchedScenarios: earns a candidate-pool spot only,
+    /// never force-included.</summary>
+    public List<ScenarioRecord> EmbeddingMatchedScenarios { get; set; } = new();
+
+    /// <summary>Scenarios surfaced via the Python TF-IDF+SVD ranker (Option A2) — same
+    /// soft-signal contract as the other candidate-search signals.</summary>
+    public List<ScenarioRecord> PySemanticMatchedScenarios { get; set; } = new();
 
     /// <summary>Non-fatal warnings if some files' content couldn't be fetched.</summary>
     public List<string> ContentFetchWarnings { get; set; } = new();
